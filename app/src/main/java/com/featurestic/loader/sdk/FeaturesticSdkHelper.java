@@ -288,19 +288,22 @@ public final class FeaturesticSdkHelper {
             long startMs = System.currentTimeMillis();
             boolean obbOk = false;
 
-            // Step 1: ALWAYS explicitly sync OBB from host → virtual path.
-            // SDK's copyObbWithProgress() may return true just because OBB exists at host path
-            // (/Android/obb/<pkg>), without copying to virtual path (/SdCard/Android/obb/<pkg>).
-            // Virtualized game reads from virtual path, so we must copy there ourselves.
+            // Step 1: SDK's copyObbWithProgress() — PRIMARY.
+            // Reference SDK uses multi-layer discovery:
+            //   Layer 1: listFiles() across all mount roots
+            //   Layer 2: Direct filename probing ("main.<vc>.<pkg>.obb") using host versionCode
+            //   Layer 3: Shell `ls` discovery (sh + su)
+            // Then Java FileInputStream copy + sh/su shell cp fallback.
+            // Runs on background thread so SDK's shell/su fallback works (SDK blocks on main thread).
             try {
-                obbOk = explicitShellObbSync(fPkg);
+                obbOk = FeaturesticBox.copyObbWithProgress(fCtx, fPkg, null);
             } catch (Throwable ignored) {
             }
 
-            // Step 2: Also call SDK's copy engine as backup (in case paths differ)
+            // Step 2: If SDK didn't copy, try explicit shell sync (mount --bind, sh/su cp, Java copy)
             if (!obbOk) {
                 try {
-                    obbOk = FeaturesticBox.copyObbWithProgress(fCtx, fPkg, null);
+                    obbOk = explicitShellObbSync(fPkg);
                 } catch (Throwable ignored) {
                 }
             }
@@ -312,7 +315,7 @@ public final class FeaturesticSdkHelper {
                 fAct.runOnUiThread(() -> Toast.makeText(fCtx,
                         "OBB sync fail!\nHost: /storage/emulated/0/Android/obb/" + fPkg +
                                 "\nVirtual: /storage/emulated/0/SdCard/Android/obb/" + fPkg +
-                                "\nNon-root: Android blocks virtual game from reading host OBB. Root + mount --bind chahiye.",
+                                "\nAll Files Access permission enable karein, phir try karein.",
                         Toast.LENGTH_LONG).show());
             }
 
@@ -329,8 +332,9 @@ public final class FeaturesticSdkHelper {
     }
 
     /**
-     * Explicit shell OBB sync: tries mount --bind (instant, no 1GB copy),
-     * then unprivileged `sh cp`, then rooted `su cp` fallback.
+     * Explicit shell OBB sync fallback: tries mount --bind (instant, root),
+     * then sh cp, then su cp, then Java FileInputStream copy (non-root friendly).
+     * Does NOT bail out early if listFiles() returns null — tries known OBB filenames directly.
      * Source: /storage/emulated/0/Android/obb/<pkg>/
      * Dest:   /storage/emulated/0/SdCard/Android/obb/<pkg>/
      */
@@ -339,11 +343,35 @@ public final class FeaturesticSdkHelper {
         String srcDir = extRoot + "/Android/obb/" + pkg;
         String dstDir = extRoot + "/SdCard/Android/obb/" + pkg;
 
-        // Verify source has .obb files
+        // Collect candidate source OBB files (don't bail if listFiles() returns null)
+        java.util.List<File> srcFiles = new java.util.ArrayList<>();
         File src = new File(srcDir);
-        if (!src.exists() || !src.isDirectory()) return false;
-        File[] obbs = src.listFiles((d, n) -> n.endsWith(".obb"));
-        if (obbs == null || obbs.length == 0) return false;
+        if (src.exists() && src.isDirectory()) {
+            File[] list = src.listFiles((d, n) -> n.endsWith(".obb"));
+            if (list != null) {
+                for (File f : list) {
+                    if (f != null && f.isFile() && f.length() >= 1024L * 1024L) {
+                        srcFiles.add(f);
+                    }
+                }
+            }
+            // Also probe known BGMI/PUBG OBB filenames directly (Layer 2 discovery)
+            String[] knownNames = new String[]{
+                    "main.21535." + pkg + ".obb",
+                    "patch.21535." + pkg + ".obb",
+                    "main.21536." + pkg + ".obb",
+                    "main.21534." + pkg + ".obb",
+            };
+            for (String name : knownNames) {
+                File f = new File(srcDir, name);
+                if (f.isFile() && f.length() >= 1024L * 1024L && !srcFiles.contains(f)) {
+                    srcFiles.add(f);
+                }
+            }
+        }
+        if (srcFiles.isEmpty()) return false;
+
+        new File(dstDir).mkdirs();
 
         // Option A: mount --bind (instant, no 1GB copy, needs root)
         for (boolean useRoot : new boolean[]{true, false}) {
@@ -386,8 +414,7 @@ public final class FeaturesticSdkHelper {
         // Option C: Java FileInputStream copy (final fallback for non-root)
         // Java file APIs go through Android framework and respect MANAGE_EXTERNAL_STORAGE
         try {
-            new File(dstDir).mkdirs();
-            for (File srcFile : obbs) {
+            for (File srcFile : srcFiles) {
                 if (srcFile == null || !srcFile.isFile()) continue;
                 File dstFile = new File(new File(dstDir), srcFile.getName());
                 if (dstFile.exists() && dstFile.length() == srcFile.length()) continue;
