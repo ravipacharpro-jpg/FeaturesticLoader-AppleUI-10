@@ -14,6 +14,12 @@ import android.provider.Settings;
 import com.featurestic.loader.AppConfig;
 import com.featurestic.sdk.FeaturesticBox;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+
 /**
  * Clean SDK Controller that separates FeaturesticBox Virtual Engine calls from UI code.
  * Handles:
@@ -260,11 +266,68 @@ public final class FeaturesticSdkHelper {
             }
         } catch (Throwable ignored) {
         }
+
+        // OBB copy to standard Android path (/storage/emulated/0/Android/obb/<pkg>/)
+        // so the virtualized game can read its OBB files at launch time.
+        // Reference pattern: MetaStorageManager.getObbContainerPath()
+        try {
+            copyHostObbToStandardPath(context, packageName);
+        } catch (Throwable ignored) {
+        }
+
         return FeaturesticBox.startGame(
                 context,
                 packageName,
                 0,
                 AppConfig.PLUGIN_SO_URL_OR_PATH
         );
+    }
+
+    /**
+     * Copies host .obb files from /storage/emulated/0/Android/obb/<pkg> to the
+     * same standard path so the game inside the virtual container can find them.
+     * (BlackBox/Parallax reference uses this exact path pattern.)
+     */
+    private static boolean copyHostObbToStandardPath(Context context, String packageName) {
+        if (context == null || packageName == null || packageName.isEmpty()) return false;
+        String pkg = packageName.trim();
+
+        // Source: standard host OBB directory
+        File srcDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
+        if (!srcDir.exists() || !srcDir.isDirectory()) return false;
+
+        // Destination: same standard path (target for virtualized game reads)
+        File dstDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
+        if (dstDir.equals(srcDir)) return true; // already at standard path
+
+        File[] obbFiles = srcDir.listFiles((dir, name) -> name.endsWith(".obb"));
+        if (obbFiles == null || obbFiles.length == 0) return false;
+
+        try {
+            dstDir.mkdirs();
+            boolean copiedAny = false;
+            for (File srcFile : obbFiles) {
+                if (srcFile == null || !srcFile.isFile()) continue;
+                long srcLen = srcFile.length();
+                if (srcLen < 1024L * 1024L) continue; // ignore tiny/invalid files
+                File dstFile = new File(dstDir, srcFile.getName());
+                if (dstFile.exists() && dstFile.length() == srcLen) {
+                    copiedAny = true;
+                    continue;
+                }
+                copyFile(srcFile, dstFile);
+                copiedAny = true;
+            }
+            return copiedAny;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static void copyFile(File src, File dst) throws IOException {
+        try (FileChannel in = new FileInputStream(src).getChannel();
+             FileChannel out = new FileOutputStream(dst).getChannel()) {
+            in.transferTo(0, in.size(), out);
+        }
     }
 }
