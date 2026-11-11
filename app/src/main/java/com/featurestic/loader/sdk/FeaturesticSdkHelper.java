@@ -382,6 +382,34 @@ public final class FeaturesticSdkHelper {
             } catch (Throwable ignored) {
             }
         }
+
+        // Option C: Java FileInputStream copy (final fallback for non-root)
+        // Java file APIs go through Android framework and respect MANAGE_EXTERNAL_STORAGE
+        try {
+            new File(dstDir).mkdirs();
+            for (File srcFile : obbs) {
+                if (srcFile == null || !srcFile.isFile()) continue;
+                File dstFile = new File(new File(dstDir), srcFile.getName());
+                if (dstFile.exists() && dstFile.length() == srcFile.length()) continue;
+                try (java.io.FileInputStream in = new java.io.FileInputStream(srcFile);
+                     java.io.FileOutputStream out = new java.io.FileOutputStream(dstFile)) {
+                    byte[] buf = new byte[1024 * 1024];
+                    int read;
+                    while ((read = in.read(buf)) != -1) {
+                        out.write(buf, 0, read);
+                    }
+                }
+                dstFile.setReadable(true, false);
+            }
+            File dst = new File(dstDir);
+            File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
+            if (dstObs != null && dstObs.length > 0) {
+                for (File f : dstObs) {
+                    if (f.length() >= 1024L * 1024L) return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         return false;
     }
 }
