@@ -147,6 +147,42 @@ public final class FeaturesticSdkHelper {
     }
 
     /**
+     * Checks if "Install unknown apps" (REQUEST_INSTALL_PACKAGES) permission is granted.
+     * Required on Android 8.0+ to install APKs from this Loader.
+     */
+    public static boolean canRequestPackageInstalls(Context context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && context != null) {
+            try {
+                return context.getPackageManager()
+                        .canRequestPackageInstalls();
+            } catch (Throwable ignored) {
+                return true;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Opens the "Install unknown apps" settings screen for this Loader,
+     * so the user can allow installing APKs from this app.
+     */
+    public static void requestInstallPackagesPermission(Activity activity) {
+        if (activity == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                intent.setData(Uri.parse("package:" + activity.getPackageName()));
+                activity.startActivityForResult(intent, 1004);
+            } catch (Throwable ignored) {
+                try {
+                    Intent intent = new Intent(Settings.ACTION_INSTALL_PACKAGES);
+                    activity.startActivityForResult(intent, 1004);
+                } catch (Throwable ignored2) {}
+            }
+        }
+    }
+
+    /**
      * Opens the Android 11+ "Allow access to manage all files" settings screen for this Loader,
      * or requests READ/WRITE_EXTERNAL_STORAGE on Android 10.
      */
@@ -286,6 +322,14 @@ public final class FeaturesticSdkHelper {
                     "All Files Access chahiye OBB copy ke liye! Settings se enable karein.",
                     Toast.LENGTH_LONG).show());
             requestAllFilesPermission(act);
+        }
+
+        // REQUEST_INSTALL_PACKAGES needed to install APKs inside virtual box
+        if (act != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !canRequestPackageInstalls(ctx)) {
+            act.runOnUiThread(() -> Toast.makeText(ctx,
+                    "Install unknown apps permission chahiye APK install karne ke liye! Settings se enable karein.",
+                    Toast.LENGTH_LONG).show());
+            requestInstallPackagesPermission(act);
         }
 
         final Context fCtx = ctx;
