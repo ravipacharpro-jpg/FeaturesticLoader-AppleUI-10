@@ -18,7 +18,6 @@ import com.featurestic.loader.AppConfig;
 import com.featurestic.sdk.FeaturesticBox;
 
 import java.io.File;
-import java.util.Locale;
 
 /**
  * Clean SDK Controller that separates FeaturesticBox Virtual Engine calls from UI code.
@@ -106,7 +105,6 @@ public final class FeaturesticSdkHelper {
         }
         return true;
     }
-}
 
     /**
      * Opens the system "Display over other apps" settings screen for this Loader.
@@ -146,7 +144,6 @@ public final class FeaturesticSdkHelper {
         }
         return true;
     }
-}
 
     /**
      * Opens the Android 11+ "Allow access to manage all files" settings screen for this Loader,
@@ -302,12 +299,6 @@ public final class FeaturesticSdkHelper {
                 android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched + " time=" + (System.currentTimeMillis() - startMs) + "ms");
             } catch (Throwable t) {
                 android.util.Log.e("FeaturesticOBB", "startGame error: " + t.getMessage());
-            }
-
-            if (fAct != null) {
-                fAct.runOnUiThread(() -> {
-                    // UI button reset is handled by MainActivity.launchGameInVirtualBox()
-                });
             }
         }, "Featurestic-Game-Launch").start();
 
