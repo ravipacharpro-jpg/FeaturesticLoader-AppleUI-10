@@ -173,12 +173,7 @@ public final class FeaturesticSdkHelper {
                 Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
                 intent.setData(Uri.parse("package:" + activity.getPackageName()));
                 activity.startActivityForResult(intent, 1004);
-            } catch (Throwable ignored) {
-                try {
-                    Intent intent = new Intent(Settings.ACTION_INSTALL_PACKAGES);
-                    activity.startActivityForResult(intent, 1004);
-                } catch (Throwable ignored2) {}
-            }
+            } catch (Throwable ignored) {}
         }
     }
 
