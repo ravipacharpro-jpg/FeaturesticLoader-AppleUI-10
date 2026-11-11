@@ -271,7 +271,7 @@ public final class FeaturesticSdkHelper {
         final String pkg = packageName;
         final Activity act = (context instanceof Activity) ? (Activity) context : null;
 
-        // Permission check: without All Files Access, OBB copy cannot read host /Android/obb/<pkg>/
+        // Permission check
         if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
             if (act != null) {
                 act.runOnUiThread(() -> Toast.makeText(ctx,
@@ -284,159 +284,30 @@ public final class FeaturesticSdkHelper {
         final String fPkg = pkg;
         final Activity fAct = act;
 
+        // Delegate entirely to SDK's startGame() which internally calls
+        // FeaturesticStorageManager.copyOrSyncObbWithProgress() — the reference
+        // SDK's multi-layer OBB copy (discovery + Java copy + shell/su fallback).
+        // Runs on background thread so SDK's shell cp fallback works (SDK blocks
+        // tryShellOrRootCopyObb() on main thread).
         new Thread(() -> {
             long startMs = System.currentTimeMillis();
-            boolean obbOk = false;
-
-            // Step 1: SDK's copyObbWithProgress() — PRIMARY.
-            // Reference SDK uses multi-layer discovery:
-            //   Layer 1: listFiles() across all mount roots
-            //   Layer 2: Direct filename probing ("main.<vc>.<pkg>.obb") using host versionCode
-            //   Layer 3: Shell `ls` discovery (sh + su)
-            // Then Java FileInputStream copy + sh/su shell cp fallback.
-            // Runs on background thread so SDK's shell/su fallback works (SDK blocks on main thread).
             try {
-                obbOk = FeaturesticBox.copyObbWithProgress(fCtx, fPkg, null);
-            } catch (Throwable ignored) {
+                // startGame() internally:
+                //   1. Checks hasVirtualObbFiles()
+                //   2. If missing, calls copyOrSyncObbWithProgress() (SDK's multi-layer copy)
+                //   3. Launches APK via launchApk()
+                boolean launched = FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched + " time=" + (System.currentTimeMillis() - startMs) + "ms");
+            } catch (Throwable t) {
+                android.util.Log.e("FeaturesticOBB", "startGame error: " + t.getMessage());
             }
 
-            // Step 2: If SDK didn't copy, try explicit shell sync (mount --bind, sh/su cp, Java copy)
-            if (!obbOk) {
-                try {
-                    obbOk = explicitShellObbSync(fPkg);
-                } catch (Throwable ignored) {
-                }
+            if (fAct != null) {
+                fAct.runOnUiThread(() -> {
+                    // UI button reset is handled by MainActivity.launchGameInVirtualBox()
+                });
             }
-
-            long elapsed = System.currentTimeMillis() - startMs;
-            android.util.Log.d("FeaturesticOBB", "OBB sync result=" + obbOk + " time=" + elapsed + "ms");
-
-            if (fAct != null && !obbOk) {
-                fAct.runOnUiThread(() -> Toast.makeText(fCtx,
-                        "OBB sync fail!\nHost: /storage/emulated/0/Android/obb/" + fPkg +
-                                "\nVirtual: /storage/emulated/0/SdCard/Android/obb/" + fPkg +
-                                "\nAll Files Access permission enable karein, phir try karein.",
-                        Toast.LENGTH_LONG).show());
-            }
-
-            // Step 3: startGame() also retries OBB internally before launching
-            new Handler(Looper.getMainLooper()).post(() -> {
-                try {
-                    FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
-                } catch (Throwable ignored) {
-                }
-            });
         }, "Featurestic-Game-Launch").start();
 
         return true;
     }
-
-    /**
-     * Explicit shell OBB sync fallback: tries mount --bind (instant, root),
-     * then sh cp, then su cp, then Java FileInputStream copy (non-root friendly).
-     * Does NOT bail out early if listFiles() returns null — tries known OBB filenames directly.
-     * Source: /storage/emulated/0/Android/obb/<pkg>/
-     * Dest:   /storage/emulated/0/SdCard/Android/obb/<pkg>/
-     */
-    private static boolean explicitShellObbSync(String pkg) {
-        String extRoot = Environment.getExternalStorageDirectory().getAbsolutePath();
-        String srcDir = extRoot + "/Android/obb/" + pkg;
-        String dstDir = extRoot + "/SdCard/Android/obb/" + pkg;
-
-        // Collect candidate source OBB files (don't bail if listFiles() returns null)
-        java.util.List<File> srcFiles = new java.util.ArrayList<>();
-        File src = new File(srcDir);
-        if (src.exists() && src.isDirectory()) {
-            File[] list = src.listFiles((d, n) -> n.endsWith(".obb"));
-            if (list != null) {
-                for (File f : list) {
-                    if (f != null && f.isFile() && f.length() >= 1024L * 1024L) {
-                        srcFiles.add(f);
-                    }
-                }
-            }
-            // Also probe known BGMI/PUBG OBB filenames directly (Layer 2 discovery)
-            String[] knownNames = new String[]{
-                    "main.21535." + pkg + ".obb",
-                    "patch.21535." + pkg + ".obb",
-                    "main.21536." + pkg + ".obb",
-                    "main.21534." + pkg + ".obb",
-            };
-            for (String name : knownNames) {
-                File f = new File(srcDir, name);
-                if (f.isFile() && f.length() >= 1024L * 1024L && !srcFiles.contains(f)) {
-                    srcFiles.add(f);
-                }
-            }
-        }
-        if (srcFiles.isEmpty()) return false;
-
-        new File(dstDir).mkdirs();
-
-        // Option A: mount --bind (instant, no 1GB copy, needs root)
-        for (boolean useRoot : new boolean[]{true, false}) {
-            try {
-                String shell = useRoot ? "su -c " : "";
-                String cmd = shell + "mkdir -p \"" + dstDir + "\" && mount --bind \"" + srcDir + "\" \"" + dstDir + "\"";
-                Process p = Runtime.getRuntime().exec(cmd);
-                p.waitFor();
-
-                File dst = new File(dstDir);
-                File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
-                if (dstObs != null && dstObs.length > 0) {
-                    for (File f : dstObs) {
-                        if (f.length() >= 1024L * 1024L) return true;
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-
-        // Option B: sh cp then su cp (actual file copy, slower, 1.1 GB)
-        for (boolean useRoot : new boolean[]{false, true}) {
-            try {
-                String shell = useRoot ? "su -c " : "";
-                String cmd = shell + "mkdir -p \"" + dstDir + "\" && cp -f \"" + srcDir + "/\"*.obb \"" + dstDir + "/\" && chmod 666 \"" + dstDir + "/\"*.obb";
-                Process p = Runtime.getRuntime().exec(cmd);
-                p.waitFor();
-
-                File dst = new File(dstDir);
-                File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
-                if (dstObs != null && dstObs.length > 0) {
-                    for (File f : dstObs) {
-                        if (f.length() >= 1024L * 1024L) return true;
-                    }
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-
-        // Option C: Java FileInputStream copy (final fallback for non-root)
-        // Java file APIs go through Android framework and respect MANAGE_EXTERNAL_STORAGE
-        try {
-            for (File srcFile : srcFiles) {
-                if (srcFile == null || !srcFile.isFile()) continue;
-                File dstFile = new File(new File(dstDir), srcFile.getName());
-                if (dstFile.exists() && dstFile.length() == srcFile.length()) continue;
-                try (java.io.FileInputStream in = new java.io.FileInputStream(srcFile);
-                     java.io.FileOutputStream out = new java.io.FileOutputStream(dstFile)) {
-                    byte[] buf = new byte[1024 * 1024];
-                    int read;
-                    while ((read = in.read(buf)) != -1) {
-                        out.write(buf, 0, read);
-                    }
-                }
-                dstFile.setReadable(true, false);
-            }
-            File dst = new File(dstDir);
-            File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
-            if (dstObs != null && dstObs.length > 0) {
-                for (File f : dstObs) {
-                    if (f.length() >= 1024L * 1024L) return true;
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return false;
-    }
-}
