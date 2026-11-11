@@ -188,16 +188,14 @@ public final class FeaturesticSdkHelper {
 
     public static boolean isGameSetupReady(final Context context, final String packageName) {
         if (context == null || packageName == null || packageName.isEmpty()) return false;
-        boolean hasVirtObb = hasVirtualObbFiles(packageName);
-        if (!hasVirtObb) {
-            return false;
-        }
         SharedPreferences sp = context.getSharedPreferences(PREF_SETUP, Context.MODE_PRIVATE);
         boolean markedDone = sp.getBoolean("setup_done_" + packageName, false);
         boolean installedInBox = false;
         try {
             installedInBox = FeaturesticBox.isInstalled(packageName, 0);
         } catch (Throwable ignored) {}
+        // If setup was already marked done and host game is installed, allow Start Game.
+        // OBB sync will be retried inside launchVirtualGame() if still missing.
         if (markedDone && isInstalledOnHost(context, packageName)) {
             if (!installedInBox) {
                 new Thread(new Runnable() {
@@ -213,6 +211,8 @@ public final class FeaturesticSdkHelper {
             }
             return true;
         }
+        // Fresh setup: require both APK clone and valid OBB in virtual storage.
+        boolean hasVirtObb = hasVirtualObbFiles(packageName);
         return installedInBox && hasVirtObb;
     }
 

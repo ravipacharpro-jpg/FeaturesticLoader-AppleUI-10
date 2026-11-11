@@ -392,10 +392,17 @@ public class MainActivity extends Activity {
 
             @Override
             public void onComplete(boolean success, String message) {
+                if (success) {
+                    Toast.makeText(MainActivity.this,
+                            "Setup complete! Tap Start Game to launch.",
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(MainActivity.this,
+                            "Setup failed: " + (message != null ? message : "Unknown error") +
+                                    "\nGrant 'All Files Access' permission and tap Setup Game again.",
+                            Toast.LENGTH_LONG).show();
+                }
                 refreshGameStateUI(true);
-                Toast.makeText(MainActivity.this,
-                        "Setup complete! Tap Start Game to launch.",
-                        Toast.LENGTH_SHORT).show();
             }
         });
     }
