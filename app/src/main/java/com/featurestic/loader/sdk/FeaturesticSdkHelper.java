@@ -106,6 +106,7 @@ public final class FeaturesticSdkHelper {
         }
         return true;
     }
+}
 
     /**
      * Opens the system "Display over other apps" settings screen for this Loader.
@@ -145,6 +146,7 @@ public final class FeaturesticSdkHelper {
         }
         return true;
     }
+}
 
     /**
      * Opens the Android 11+ "Allow access to manage all files" settings screen for this Loader,
@@ -311,3 +313,4 @@ public final class FeaturesticSdkHelper {
 
         return true;
     }
+}
