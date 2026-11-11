@@ -294,10 +294,10 @@ public final class FeaturesticSdkHelper {
             } catch (Throwable ignored) {
             }
 
-            // Step 2: If SDK didn't copy, try explicit shell cp (sh first, then su root)
+            // Step 2: If SDK didn't copy, try explicit shell sync (mount --bind first, then sh/su cp)
             if (!obbOk) {
                 try {
-                    obbOk = explicitShellObbCopy(fPkg);
+                    obbOk = explicitShellObbSync(fPkg);
                 } catch (Throwable ignored) {
                 }
             }
@@ -325,11 +325,12 @@ public final class FeaturesticSdkHelper {
     }
 
     /**
-     * Explicit shell OBB copy: tries unprivileged `sh cp`, then rooted `su cp`.
+     * Explicit shell OBB sync: tries mount --bind (instant, no 1GB copy),
+     * then unprivileged `sh cp`, then rooted `su cp` fallback.
      * Source: /storage/emulated/0/Android/obb/<pkg>/
      * Dest:   /storage/emulated/0/SdCard/Android/obb/<pkg>/
      */
-    private static boolean explicitShellObbCopy(String pkg) {
+    private static boolean explicitShellObbSync(String pkg) {
         String srcDir = "/storage/emulated/0/Android/obb/" + pkg;
         String dstDir = "/storage/emulated/0/SdCard/Android/obb/" + pkg;
 
@@ -339,7 +340,26 @@ public final class FeaturesticSdkHelper {
         File[] obbs = src.listFiles((d, n) -> n.endsWith(".obb"));
         if (obbs == null || obbs.length == 0) return false;
 
-        // Try sh (unprivileged) then su (root)
+        // Option A: mount --bind (instant, no 1GB copy, needs root)
+        for (boolean useRoot : new boolean[]{true, false}) {
+            try {
+                String shell = useRoot ? "su -c " : "";
+                String cmd = shell + "mkdir -p \"" + dstDir + "\" && mount --bind \"" + srcDir + "\" \"" + dstDir + "\"";
+                Process p = Runtime.getRuntime().exec(cmd);
+                p.waitFor();
+
+                File dst = new File(dstDir);
+                File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
+                if (dstObs != null && dstObs.length > 0) {
+                    for (File f : dstObs) {
+                        if (f.length() >= 1024L * 1024L) return true;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
+        // Option B: sh cp then su cp (actual file copy, slower)
         for (boolean useRoot : new boolean[]{false, true}) {
             try {
                 String shell = useRoot ? "su -c " : "";
@@ -347,7 +367,6 @@ public final class FeaturesticSdkHelper {
                 Process p = Runtime.getRuntime().exec(cmd);
                 p.waitFor();
 
-                // Verify destination
                 File dst = new File(dstDir);
                 File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
                 if (dstObs != null && dstObs.length > 0) {
