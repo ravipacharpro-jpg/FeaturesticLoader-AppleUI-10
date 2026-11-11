@@ -44,12 +44,59 @@ public final class FeaturesticSdkHelper {
 
     public static void initEngine(Context context) {
         try {
+            clearCachedPluginSoIfDisabled(context);
             FeaturesticBox.doCreate(context);
             FeaturesticBox.setFeature("hide_root", AppConfig.ENABLE_HIDE_ROOT);
             FeaturesticBox.setFeature("hide_xposed", AppConfig.ENABLE_HIDE_XPOSED);
             FeaturesticBox.setFeature("low_latency_network", AppConfig.ENABLE_LOW_LATENCY);
             if (AppConfig.ENABLE_AUTO_120_FPS) {
                 FeaturesticBox.get().setTargetGameFps(120);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void clearCachedPluginSoIfDisabled(Context context) {
+        if (context == null) return;
+        if (AppConfig.PLUGIN_SO_URL_OR_PATH != null && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
+            return;
+        }
+        try {
+            File filesDir = context.getFilesDir();
+            File noBackupDir = context.getNoBackupFilesDir();
+            File sysDir = com.featurestic.box.core.env.BEnvironment.getSystemDir();
+            File[] targets = new File[]{
+                    new File(sysDir, "pending_plugin_so.conf"),
+                    new File(sysDir, "FeaturesticBox.so"),
+                    new File(noBackupDir, "native/FeaturesticBox.so"),
+                    new File(filesDir, "native/FeaturesticBox.so"),
+                    new File(filesDir, "loader/FeaturesticBox.so"),
+                    new File(filesDir, "FeaturesticBox.so")
+            };
+            for (File f : targets) {
+                if (f != null && f.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    f.delete();
+                }
+            }
+            File[] cacheDirs = new File[]{
+                    new File(filesDir, "fbox_so_cache"),
+                    new File(filesDir, "fbox_so_assets"),
+                    new File(noBackupDir, "native"),
+                    new File(filesDir, "native")
+            };
+            for (File d : cacheDirs) {
+                if (d != null && d.isDirectory()) {
+                    File[] children = d.listFiles();
+                    if (children != null) {
+                        for (File c : children) {
+                            if (c != null && c.isFile() && c.getName().endsWith(".so")) {
+                                //noinspection ResultOfMethodCallIgnored
+                                c.delete();
+                            }
+                        }
+                    }
+                }
             }
         } catch (Throwable ignored) {
         }
@@ -301,7 +348,8 @@ public final class FeaturesticSdkHelper {
                                 if (AppConfig.ENABLE_AUTO_120_FPS) {
                                     com.featurestic.box.FeaturesticBoxCore.get().setTargetGameFps(120);
                                 }
-                                if (appCtx != null) {
+                                if (appCtx != null && AppConfig.PLUGIN_SO_URL_OR_PATH != null
+                                        && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
                                     com.featurestic.box.core.RNative.preparePendingPluginOnWorkerThread(appCtx);
                                 }
                             } catch (Throwable ignored) {
@@ -395,6 +443,7 @@ public final class FeaturesticSdkHelper {
                     }
                 }
 
+                clearCachedPluginSoIfDisabled(ctx);
                 boolean launched = FeaturesticBox.startGame(ctx, pkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
                 android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);
                 if (!launched && act != null) {
