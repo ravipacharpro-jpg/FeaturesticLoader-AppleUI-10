@@ -267,11 +267,16 @@ public final class FeaturesticSdkHelper {
         } catch (Throwable ignored) {
         }
 
-        // OBB copy to standard Android path (/storage/emulated/0/Android/obb/<pkg>/)
-        // so the virtualized game can read its OBB files at launch time.
-        // Reference pattern: MetaStorageManager.getObbContainerPath()
+        // Ensure OBB is available at standard Android path where the virtualized game reads it:
+        //   /storage/emulated/0/Android/obb/<pkg>/  (BlackBox / Parallax reference pattern)
         try {
-            copyHostObbToStandardPath(context, packageName);
+            ensureObbAtStandardPath(context, packageName);
+        } catch (Throwable ignored) {
+        }
+
+        // Also sync to virtual/SdCard path that FeaturesticStorageManager checks
+        try {
+            syncObbToVirtualPath(context, packageName);
         } catch (Throwable ignored) {
         }
 
@@ -284,50 +289,111 @@ public final class FeaturesticSdkHelper {
     }
 
     /**
-     * Copies host .obb files from /storage/emulated/0/Android/obb/<pkg> to the
-     * same standard path so the game inside the virtual container can find them.
-     * (BlackBox/Parallax reference uses this exact path pattern.)
+     * Ensures .obb files exist at the standard Android path:
+     *   /storage/emulated/0/Android/obb/<pkg>/
+     * This is the path BlackBox/Parallax virtualized games read at runtime.
+     * If OBBs are already there, nothing to do. If found elsewhere, copy them here.
      */
-    private static boolean copyHostObbToStandardPath(Context context, String packageName) {
+    private static boolean ensureObbAtStandardPath(Context context, String packageName) {
         if (context == null || packageName == null || packageName.isEmpty()) return false;
         String pkg = packageName.trim();
 
-        // Source: standard host OBB directory
-        File srcDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
-        if (!srcDir.exists() || !srcDir.isDirectory()) return false;
+        File stdDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
+        if (!stdDir.exists()) {
+            stdDir.mkdirs();
+        }
 
-        // Destination: same standard path (target for virtualized game reads)
-        File dstDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
-        if (dstDir.equals(srcDir)) return true; // already at standard path
+        // Check if valid OBB already exists at standard path
+        File[] existing = stdDir.listFiles((dir, name) -> name.endsWith(".obb"));
+        boolean hasValid = false;
+        if (existing != null) {
+            for (File f : existing) {
+                if (f != null && f.isFile() && f.length() >= 1024L * 1024L) {
+                    hasValid = true;
+                    break;
+                }
+            }
+        }
+        if (hasValid) return true;
 
-        File[] obbFiles = srcDir.listFiles((dir, name) -> name.endsWith(".obb"));
+        // Search common host locations for OBB files and copy them to standard path
+        String[] searchRoots = new String[]{
+                Environment.getExternalStorageDirectory().getAbsolutePath(),
+                "/storage/emulated/0",
+                "/sdcard",
+                "/storage/emulated/0/Download",
+                "/storage/emulated/0/OBB",
+        };
+
+        for (String root : searchRoots) {
+            try {
+                File searchDir = new File(root, "Android/obb/" + pkg);
+                if (!searchDir.exists() || !searchDir.isDirectory()) continue;
+                File[] found = searchDir.listFiles((dir, name) -> name.endsWith(".obb"));
+                if (found == null || found.length == 0) continue;
+
+                stdDir.mkdirs();
+                for (File srcFile : found) {
+                    if (srcFile == null || !srcFile.isFile()) continue;
+                    long len = srcFile.length();
+                    if (len < 1024L * 1024L) continue;
+                    File dstFile = new File(stdDir, srcFile.getName());
+                    if (dstFile.exists() && dstFile.length() == len) continue;
+                    copyFile(srcFile, dstFile);
+                }
+                return true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Syncs OBB files to the virtual/SdCard path that FeaturesticStorageManager checks:
+     *   /storage/emulated/0/SdCard/Android/obb/<pkg>/
+     */
+    private static boolean syncObbToVirtualPath(Context context, String packageName) {
+        if (context == null || packageName == null || packageName.isEmpty()) return false;
+        String pkg = packageName.trim();
+
+        File stdDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
+        if (!stdDir.exists() || !stdDir.isDirectory()) return false;
+
+        File[] obbFiles = stdDir.listFiles((dir, name) -> name.endsWith(".obb"));
         if (obbFiles == null || obbFiles.length == 0) return false;
 
+        File virtDir = new File(Environment.getExternalStorageDirectory(), "SdCard/Android/obb/" + pkg);
         try {
-            dstDir.mkdirs();
-            boolean copiedAny = false;
-            for (File srcFile : obbFiles) {
-                if (srcFile == null || !srcFile.isFile()) continue;
-                long srcLen = srcFile.length();
-                if (srcLen < 1024L * 1024L) continue; // ignore tiny/invalid files
-                File dstFile = new File(dstDir, srcFile.getName());
-                if (dstFile.exists() && dstFile.length() == srcLen) {
-                    copiedAny = true;
-                    continue;
-                }
-                copyFile(srcFile, dstFile);
-                copiedAny = true;
-            }
-            return copiedAny;
+            virtDir.mkdirs();
         } catch (Throwable ignored) {
             return false;
         }
+
+        boolean copiedAny = false;
+        for (File srcFile : obbFiles) {
+            if (srcFile == null || !srcFile.isFile()) continue;
+            long len = srcFile.length();
+            if (len < 1024L * 1024L) continue;
+            File dstFile = new File(virtDir, srcFile.getName());
+            if (dstFile.exists() && dstFile.length() == len) {
+                copiedAny = true;
+                continue;
+            }
+            try {
+                copyFile(srcFile, dstFile);
+                copiedAny = true;
+            } catch (Throwable ignored) {
+            }
+        }
+        return copiedAny;
     }
 
     private static void copyFile(File src, File dst) throws IOException {
-        try (FileChannel in = new FileInputStream(src).getChannel();
-             FileChannel out = new FileOutputStream(dst).getChannel()) {
-            in.transferTo(0, in.size(), out);
+        try (java.io.FileInputStream in = new java.io.FileInputStream(src);
+             java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
+            java.nio.channels.FileChannel inCh = in.getChannel();
+            java.nio.channels.FileChannel outCh = out.getChannel();
+            inCh.transferTo(0, inCh.size(), outCh);
         }
     }
 }
