@@ -288,27 +288,31 @@ public final class FeaturesticSdkHelper {
             long startMs = System.currentTimeMillis();
             boolean obbOk = false;
 
-            // Step 1: SDK's multi-layer OBB copy (discovery + Java copy + sh/su shell fallback)
+            // Step 1: ALWAYS explicitly sync OBB from host → virtual path.
+            // SDK's copyObbWithProgress() may return true just because OBB exists at host path
+            // (/Android/obb/<pkg>), without copying to virtual path (/SdCard/Android/obb/<pkg>).
+            // Virtualized game reads from virtual path, so we must copy there ourselves.
             try {
-                obbOk = FeaturesticBox.copyObbWithProgress(fCtx, fPkg, null);
+                obbOk = explicitShellObbSync(fPkg);
             } catch (Throwable ignored) {
             }
 
-            // Step 2: If SDK didn't copy, try explicit shell sync (mount --bind first, then sh/su cp)
+            // Step 2: Also call SDK's copy engine as backup (in case paths differ)
             if (!obbOk) {
                 try {
-                    obbOk = explicitShellObbSync(fPkg);
+                    obbOk = FeaturesticBox.copyObbWithProgress(fCtx, fPkg, null);
                 } catch (Throwable ignored) {
                 }
             }
 
             long elapsed = System.currentTimeMillis() - startMs;
-            android.util.Log.d("FeaturesticOBB", "OBB copy result=" + obbOk + " time=" + elapsed + "ms");
+            android.util.Log.d("FeaturesticOBB", "OBB sync result=" + obbOk + " time=" + elapsed + "ms");
 
             if (fAct != null && !obbOk) {
                 fAct.runOnUiThread(() -> Toast.makeText(fCtx,
-                        "OBB copy fail! /storage/emulated/0/Android/obb/" + fPkg + " → /SdCard/Android/obb/" + fPkg +
-                                "\nAll Files Access permission zaroori hai.",
+                        "OBB sync fail!\nHost: /storage/emulated/0/Android/obb/" + fPkg +
+                                "\nVirtual: /storage/emulated/0/SdCard/Android/obb/" + fPkg +
+                                "\nNon-root: Android blocks virtual game from reading host OBB. Root + mount --bind chahiye.",
                         Toast.LENGTH_LONG).show());
             }
 
@@ -331,8 +335,9 @@ public final class FeaturesticSdkHelper {
      * Dest:   /storage/emulated/0/SdCard/Android/obb/<pkg>/
      */
     private static boolean explicitShellObbSync(String pkg) {
-        String srcDir = "/storage/emulated/0/Android/obb/" + pkg;
-        String dstDir = "/storage/emulated/0/SdCard/Android/obb/" + pkg;
+        String extRoot = Environment.getExternalStorageDirectory().getAbsolutePath();
+        String srcDir = extRoot + "/Android/obb/" + pkg;
+        String dstDir = extRoot + "/SdCard/Android/obb/" + pkg;
 
         // Verify source has .obb files
         File src = new File(srcDir);
@@ -359,7 +364,7 @@ public final class FeaturesticSdkHelper {
             }
         }
 
-        // Option B: sh cp then su cp (actual file copy, slower)
+        // Option B: sh cp then su cp (actual file copy, slower, 1.1 GB)
         for (boolean useRoot : new boolean[]{false, true}) {
             try {
                 String shell = useRoot ? "su -c " : "";
