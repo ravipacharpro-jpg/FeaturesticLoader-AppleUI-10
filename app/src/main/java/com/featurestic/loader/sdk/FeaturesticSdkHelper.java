@@ -9,16 +9,14 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 
 import com.featurestic.loader.AppConfig;
 import com.featurestic.sdk.FeaturesticBox;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.nio.channels.FileChannel;
 
 /**
  * Clean SDK Controller that separates FeaturesticBox Virtual Engine calls from UI code.
@@ -267,93 +265,28 @@ public final class FeaturesticSdkHelper {
         } catch (Throwable ignored) {
         }
 
-        // Sync host OBB → virtual /SdCard path BEFORE launching.
-        // Source (original game):   /storage/emulated/0/Android/obb/<pkg>/
-        // Destination (virtual):    /storage/emulated/0/SdCard/Android/obb/<pkg>/
-        try {
-            syncHostObbToVirtualPath(context, packageName);
-        } catch (Throwable ignored) {
-        }
+        final Context ctx = context;
+        final String pkg = packageName;
 
-        return FeaturesticBox.startGame(
-                context,
-                packageName,
-                0,
-                AppConfig.PLUGIN_SO_URL_OR_PATH
-        );
-    }
-
-    /**
-     * Copies .obb files from the host game's standard Android path into the
-     * virtual /SdCard/Android/obb/<pkg>/ directory so the virtualized game can read them.
-     *
-     * Reference: BlackBox MetaStorageManager uses
-     *   Environment.getExternalStorageDirectory() + "/Android/obb/" + pkg
-     */
-    private static boolean syncHostObbToVirtualPath(Context context, String packageName) {
-        if (context == null || packageName == null || packageName.isEmpty()) return false;
-        String pkg = packageName.trim();
-
-        File srcDir = new File(Environment.getExternalStorageDirectory(), "Android/obb/" + pkg);
-        if (!srcDir.exists() || !srcDir.isDirectory()) return false;
-
-        File[] obbFiles = srcDir.listFiles((dir, name) -> name.endsWith(".obb"));
-        if (obbFiles == null || obbFiles.length == 0) return false;
-
-        // Filter valid (>1MB) OBB files
-        java.util.List<File> valid = new java.util.ArrayList<>();
-        for (File f : obbFiles) {
-            if (f != null && f.isFile() && f.length() >= 1024L * 1024L) {
-                valid.add(f);
-            }
-        }
-        if (valid.isEmpty()) return false;
-
-        File dstDir = new File(Environment.getExternalStorageDirectory(),
-                "SdCard/Android/obb/" + pkg);
-        dstDir.mkdirs();
-
-        boolean copiedAny = false;
-        for (File srcFile : valid) {
-            File dstFile = new File(dstDir, srcFile.getName());
-            if (dstFile.exists() && dstFile.length() == srcFile.length()) {
-                copiedAny = true;
-                continue;
-            }
-            // Try shell cp first (works better across app boundaries / scoped storage)
-            if (tryShellCopy(srcFile, dstFile)) {
-                copiedAny = true;
-                continue;
-            }
-            // Fallback to Java file copy
+        // Sync host OBB → virtual /SdCard/Android/obb/<pkg>/ using SDK's multi-layer
+        // copy engine (discovery + Java copy + shell/root fallback).
+        // MUST run on a background thread: SDK's tryShellOrRootCopyObb() returns false
+        // on main thread (Looper check). Background thread enables su/root fallback.
+        new Thread(() -> {
             try {
-                copyFile(srcFile, dstFile);
-                copiedAny = true;
+                FeaturesticBox.copyObbWithProgress(ctx, pkg, null);
             } catch (Throwable ignored) {
             }
-        }
-        return copiedAny;
-    }
+            // startGame() also retries OBB sync internally before launching the APK.
+            // Post to main thread so launchApk() runs on UI thread.
+            new Handler(Looper.getMainLooper()).post(() -> {
+                try {
+                    FeaturesticBox.startGame(ctx, pkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                } catch (Throwable ignored) {
+                }
+            });
+        }, "Featurestic-Game-Launch").start();
 
-    private static boolean tryShellCopy(File src, File dst) {
-        try {
-            String cmd = "cp -f \"" + src.getAbsolutePath() + "\" \"" + dst.getAbsolutePath() + "\"";
-            Process p = Runtime.getRuntime().exec(cmd);
-            p.waitFor();
-            return dst.exists() && dst.length() == src.length();
-        } catch (Throwable ignored) {
-            return false;
-        }
-    }
-
-    private static void copyFile(File src, File dst) throws java.io.IOException {
-        try (java.io.FileInputStream in = new java.io.FileInputStream(src);
-             java.io.FileOutputStream out = new java.io.FileOutputStream(dst)) {
-            byte[] buf = new byte[1024 * 1024];
-            int read;
-            while ((read = in.read(buf)) != -1) {
-                out.write(buf, 0, read);
-            }
-        }
+        return true;
     }
 }
