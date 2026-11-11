@@ -12,11 +12,13 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.widget.Toast;
 
 import com.featurestic.loader.AppConfig;
 import com.featurestic.sdk.FeaturesticBox;
 
 import java.io.File;
+import java.util.Locale;
 
 /**
  * Clean SDK Controller that separates FeaturesticBox Virtual Engine calls from UI code.
@@ -265,28 +267,97 @@ public final class FeaturesticSdkHelper {
         } catch (Throwable ignored) {
         }
 
-        final Context ctx = context;
+        final Context ctx = context.getApplicationContext();
         final String pkg = packageName;
+        final Activity act = (context instanceof Activity) ? (Activity) context : null;
 
-        // Sync host OBB → virtual /SdCard/Android/obb/<pkg>/ using SDK's multi-layer
-        // copy engine (discovery + Java copy + shell/root fallback).
-        // MUST run on a background thread: SDK's tryShellOrRootCopyObb() returns false
-        // on main thread (Looper check). Background thread enables su/root fallback.
+        // Permission check: without All Files Access, OBB copy cannot read host /Android/obb/<pkg>/
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            if (act != null) {
+                act.runOnUiThread(() -> Toast.makeText(ctx,
+                        "All Files Access chahiye OBB copy ke liye! Settings se 'Allow access to manage all files' enable karein.",
+                        Toast.LENGTH_LONG).show());
+            }
+        }
+
+        final Context fCtx = ctx;
+        final String fPkg = pkg;
+        final Activity fAct = act;
+
         new Thread(() -> {
+            long startMs = System.currentTimeMillis();
+            boolean obbOk = false;
+
+            // Step 1: SDK's multi-layer OBB copy (discovery + Java copy + sh/su shell fallback)
             try {
-                FeaturesticBox.copyObbWithProgress(ctx, pkg, null);
+                obbOk = FeaturesticBox.copyObbWithProgress(fCtx, fPkg, null);
             } catch (Throwable ignored) {
             }
-            // startGame() also retries OBB sync internally before launching the APK.
-            // Post to main thread so launchApk() runs on UI thread.
+
+            // Step 2: If SDK didn't copy, try explicit shell cp (sh first, then su root)
+            if (!obbOk) {
+                try {
+                    obbOk = explicitShellObbCopy(fPkg);
+                } catch (Throwable ignored) {
+                }
+            }
+
+            long elapsed = System.currentTimeMillis() - startMs;
+            android.util.Log.d("FeaturesticOBB", "OBB copy result=" + obbOk + " time=" + elapsed + "ms");
+
+            if (fAct != null && !obbOk) {
+                fAct.runOnUiThread(() -> Toast.makeText(fCtx,
+                        "OBB copy fail! /storage/emulated/0/Android/obb/" + fPkg + " → /SdCard/Android/obb/" + fPkg +
+                                "\nAll Files Access permission zaroori hai.",
+                        Toast.LENGTH_LONG).show());
+            }
+
+            // Step 3: startGame() also retries OBB internally before launching
             new Handler(Looper.getMainLooper()).post(() -> {
                 try {
-                    FeaturesticBox.startGame(ctx, pkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                    FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
                 } catch (Throwable ignored) {
                 }
             });
         }, "Featurestic-Game-Launch").start();
 
         return true;
+    }
+
+    /**
+     * Explicit shell OBB copy: tries unprivileged `sh cp`, then rooted `su cp`.
+     * Source: /storage/emulated/0/Android/obb/<pkg>/
+     * Dest:   /storage/emulated/0/SdCard/Android/obb/<pkg>/
+     */
+    private static boolean explicitShellObbCopy(String pkg) {
+        String srcDir = "/storage/emulated/0/Android/obb/" + pkg;
+        String dstDir = "/storage/emulated/0/SdCard/Android/obb/" + pkg;
+
+        // Verify source has .obb files
+        File src = new File(srcDir);
+        if (!src.exists() || !src.isDirectory()) return false;
+        File[] obbs = src.listFiles((d, n) -> n.endsWith(".obb"));
+        if (obbs == null || obbs.length == 0) return false;
+
+        // Try sh (unprivileged) then su (root)
+        for (boolean useRoot : new boolean[]{false, true}) {
+            try {
+                String shell = useRoot ? "su -c " : "";
+                String cmd = shell + "mkdir -p \"" + dstDir + "\" && cp -f \"" + srcDir + "/\"*.obb \"" + dstDir + "/\" && chmod 666 \"" + dstDir + "/\"*.obb";
+                Process p = Runtime.getRuntime().exec(cmd);
+                p.waitFor();
+
+                // Verify destination
+                File dst = new File(dstDir);
+                File[] dstObs = dst.listFiles((d, n) -> n.endsWith(".obb"));
+                if (dstObs != null && dstObs.length > 0) {
+                    for (File f : dstObs) {
+                        if (f.length() >= 1024L * 1024L) return true;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 }
