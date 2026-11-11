@@ -416,19 +416,14 @@ public class MainActivity extends Activity {
 
     /**
      * Launches the game inside FeaturesticBox when the user taps "Start Game"
+     * OBB sync is handled internally by FeaturesticBox.startGame() during launch,
+     * so we launch directly instead of re-running setup.
      */
     private void launchGameInVirtualBox() {
         if (!FeaturesticSdkHelper.isInstalledOnHost(this, selectedPackage)) {
             Toast.makeText(this,
                     "Please install " + getFriendlyTitle(selectedPackage) + " (" + selectedPackage + ") on your device first.",
                     Toast.LENGTH_LONG).show();
-            return;
-        }
-        if (!FeaturesticSdkHelper.hasVirtualObbFiles(selectedPackage)) {
-            Toast.makeText(this,
-                    "Syncing OBB into /SdCard/Android/obb/" + selectedPackage + " first...",
-                    Toast.LENGTH_SHORT).show();
-            startVirtualSetupFlow();
             return;
         }
 
