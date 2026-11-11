@@ -216,39 +216,22 @@ public final class FeaturesticSdkHelper {
     }
 
     public static boolean hasHostObbFiles(Context context, String packageName) {
-        return FeaturesticBox.hasHostObb(context, packageName);
+        return !FileCopyTask.findSourceObbFiles(context, packageName).isEmpty();
     }
 
     public static boolean hasVirtualObbFiles(String packageName) {
-        return FeaturesticBox.hasVirtualObb(packageName);
+        return FileCopyTask.hasValidVirtualObb(packageName);
     }
 
     public static boolean isGameSetupReady(final Context context, final String packageName) {
         if (context == null || packageName == null || packageName.isEmpty()) return false;
-        SharedPreferences sp = context.getSharedPreferences(PREF_SETUP, Context.MODE_PRIVATE);
-        boolean markedDone = sp.getBoolean("setup_done_" + packageName, false);
+        if (!isInstalledOnHost(context, packageName)) return false;
+
         boolean installedInBox = false;
         try {
             installedInBox = FeaturesticBox.isInstalled(packageName, 0);
-        } catch (Throwable ignored) {}
-        // If setup was already marked done and host game is installed, allow Start Game.
-        // OBB sync will be retried inside launchVirtualGame() if still missing.
-        if (markedDone && isInstalledOnHost(context, packageName)) {
-            if (!installedInBox) {
-                new Thread(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            if (!FeaturesticBox.isInstalled(packageName, 0)) {
-                                FeaturesticBox.installGame(packageName, 0);
-                            }
-                        } catch (Throwable ignored) {}
-                    }
-                }, "Featurestic-AutoHeal-Pkg").start();
-            }
-            return true;
+        } catch (Throwable ignored) {
         }
-        // Fresh setup: require both APK clone and valid OBB in virtual storage.
         boolean hasVirtObb = hasVirtualObbFiles(packageName);
         return installedInBox && hasVirtObb;
     }
@@ -259,44 +242,111 @@ public final class FeaturesticSdkHelper {
     }
 
     public static void setupGameEnvironment(final Context context, final String packageName, final FeaturesticBox.SetupCallback callback) {
-        try {
-            if (AppConfig.PLUGIN_SO_URL_OR_PATH != null && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
-                FeaturesticBox.loadCustomLibrary(AppConfig.PLUGIN_SO_URL_OR_PATH.trim());
-            }
-        } catch (Throwable ignored) {
-        }
-        FeaturesticBox.setupGameAsync(context, packageName, 0, new FeaturesticBox.SetupCallback() {
-            @Override
-            public void onProgress(int percent, String statusTitle, String statusDetail) {
-                if (callback != null) {
-                    callback.onProgress(percent, statusTitle, statusDetail);
-                }
-            }
+        final Context appCtx = context != null ? context.getApplicationContext() : null;
+        final Handler mainHandler = new Handler(Looper.getMainLooper());
 
-            @Override
-            public void onComplete(boolean success, String message) {
-                boolean installed = FeaturesticBox.isInstalled(packageName, 0);
-                if (!installed) {
-                    boolean retryOk = FeaturesticBox.installGame(packageName, 0);
-                    installed = FeaturesticBox.isInstalled(packageName, 0) || retryOk;
-                }
-                boolean finalSuccess = success || installed;
-                markGameSetupState(context, packageName, finalSuccess);
+        new Thread(() -> {
+            try {
                 if (callback != null) {
-                    callback.onComplete(finalSuccess, message);
+                    mainHandler.post(() -> callback.onProgress(15,
+                            "Step 1/3 • Initializing Virtual Container...",
+                            "Preparing sandbox for " + packageName));
                 }
+
+                if (appCtx != null) {
+                    com.featurestic.box.FeaturesticBoxCore.get().ensureInitialized(appCtx);
+                    try {
+                        com.featurestic.box.utils.compat.CrashShieldAndResourceHealer
+                                .prepareSafeAnogsEnvironment(appCtx, packageName, 0);
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                try {
+                    if (AppConfig.PLUGIN_SO_URL_OR_PATH != null && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
+                        FeaturesticBox.loadCustomLibrary(AppConfig.PLUGIN_SO_URL_OR_PATH.trim());
+                    }
+                } catch (Throwable ignored) {
+                }
+
+                if (callback != null) {
+                    mainHandler.post(() -> callback.onProgress(35,
+                            "Step 2/3 • Installing Game & Syncing OBB...",
+                            "Cloning APK and copying OBB to /SdCard/Android/obb/" + packageName));
+                }
+
+                FileCopyTask task = new FileCopyTask(appCtx);
+                task.installOrFixPkg(packageName, (percent, copiedBytes, totalBytes, fileName) -> {
+                    if (callback != null) {
+                        int overallPct = 40 + (percent * 55 / 100);
+                        long copiedMb = copiedBytes / (1024L * 1024L);
+                        long totalMb = Math.max(1L, totalBytes / (1024L * 1024L));
+                        mainHandler.post(() -> callback.onProgress(overallPct,
+                                "Step 2/3 • Copying OBB (" + percent + "%) • " + copiedMb + " / " + totalMb + " MB",
+                                fileName));
+                    }
+                }, (obbSuccess, obbMessage) -> {
+                    new Thread(() -> {
+                        boolean installed = false;
+                        try {
+                            installed = FeaturesticBox.isInstalled(packageName, 0);
+                        } catch (Throwable ignored) {
+                        }
+                        boolean obbReady = hasVirtualObbFiles(packageName);
+
+                        if (installed && obbReady) {
+                            try {
+                                com.featurestic.box.core.env.FeaturesticStorageManager
+                                        .syncDataToVirtualIfNeeded(packageName);
+                                if (AppConfig.ENABLE_AUTO_120_FPS) {
+                                    com.featurestic.box.FeaturesticBoxCore.get().setTargetGameFps(120);
+                                }
+                                if (appCtx != null) {
+                                    com.featurestic.box.core.RNative.preparePendingPluginOnWorkerThread(appCtx);
+                                }
+                            } catch (Throwable ignored) {
+                            }
+                        }
+
+                        final boolean finalSuccess = installed && obbReady;
+                        final String finalMsg;
+                        if (finalSuccess) {
+                            finalMsg = obbMessage != null ? obbMessage : "Game environment ready";
+                        } else if (!installed) {
+                            finalMsg = obbMessage != null ? obbMessage : "APK clone failed";
+                        } else {
+                            finalMsg = obbMessage != null ? obbMessage : "OBB copy failed";
+                        }
+
+                        if (appCtx != null) {
+                            markGameSetupState(appCtx, packageName, finalSuccess);
+                        }
+
+                        mainHandler.post(() -> {
+                            if (callback != null) {
+                                if (finalSuccess) {
+                                    callback.onProgress(100, "Setup Complete!",
+                                            "APK & OBB synced in /SdCard/Android/obb/" + packageName);
+                                }
+                                callback.onComplete(finalSuccess, finalMsg);
+                            }
+                        });
+                    }, "Featurestic-Setup-Finalize").start();
+                });
+            } catch (Throwable t) {
+                mainHandler.post(() -> {
+                    if (callback != null) {
+                        callback.onComplete(false, t.getMessage() != null ? t.getMessage() : "Setup error");
+                    }
+                });
             }
-        });
+        }, "Featurestic-Setup-Runner").start();
     }
 
     /**
      * Launch the virtualized game.
-     * Flow:
-     *   1. Ensure All Files Access permission (needed to read host OBB + write virtual OBB)
-     *   2. Copy OBB from host → virtual path using SDK's FeaturesticStorageManager.copyOrSyncObbWithProgress()
-     *      This uses multi-layer discovery (11+ storage roots), filename probing, shell/root cp fallback,
-     *      atomic temp-file rename, and 512KB buffer — the same logic used by reference loaders.
-     *   3. Launch via FeaturesticBox.startGame() which also retries OBB internally as backup.
+     * Ensures APK is installed in FeaturesticBoxCore and OBB is copied via FileChannel.transferTo()
+     * into /storage/emulated/0/SdCard/Android/obb/<pkg>/ before launching.
      */
     public static boolean launchVirtualGame(Context context, String packageName) {
         try {
@@ -311,69 +361,54 @@ public final class FeaturesticSdkHelper {
         final String pkg = packageName;
         final Activity act = (context instanceof Activity) ? (Activity) context : null;
 
-        // Permission check: All Files Access needed to read host OBB and write virtual OBB
-        if (act != null && Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+        if (act != null && !hasAllFilesPermission(ctx)) {
             act.runOnUiThread(() -> Toast.makeText(ctx,
-                    "All Files Access chahiye OBB copy ke liye! Settings se enable karein.",
+                    "All Files Access required to copy OBB. Grant permission in Settings.",
                     Toast.LENGTH_LONG).show());
             requestAllFilesPermission(act);
+            return false;
         }
 
-        // REQUEST_INSTALL_PACKAGES needed to install APKs inside virtual box
-        if (act != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !canRequestPackageInstalls(ctx)) {
-            act.runOnUiThread(() -> Toast.makeText(ctx,
-                    "Install unknown apps permission chahiye APK install karne ke liye! Settings se enable karein.",
-                    Toast.LENGTH_LONG).show());
-            requestInstallPackagesPermission(act);
-        }
-
-        final Context fCtx = ctx;
-        final String fPkg = pkg;
-        final Activity fAct = act;
-
-        // Step 1: Copy OBB using SDK's production-ready multi-layer copy engine.
-        // FeaturesticStorageManager.copyOrSyncObbWithProgress() handles:
-        //   - Multi-layer discovery across 11+ storage roots (/mnt/runtime/full/, /data/media/0, etc.)
-        //   - Filename probing (bypasses Android 13+ listFiles()==null block)
-        //   - Shell/root cp fallback when Java FileInputStream is blocked
-        //   - Atomic temp-file (.copying) + rename
-        //   - 512KB high-speed buffer
         new Thread(() -> {
             try {
-                android.util.Log.d("FeaturesticOBB", "Step 1: Copying OBB via SDK FeaturesticStorageManager...");
-                boolean obbCopied = FeaturesticStorageManager.copyOrSyncObbWithProgress(fCtx, fPkg,
-                        new FeaturesticStorageManager.CopyProgressListener() {
-                            @Override
-                            public void onProgress(int percent, long copiedBytes, long totalBytes, String fileName) {
-                                android.util.Log.d("FeaturesticOBB", "OBB progress: " + percent + "% " +
-                                        (copiedBytes / (1024L * 1024L)) + "MB / " +
-                                        (totalBytes / (1024L * 1024L)) + "MB " + fileName);
-                                if (fAct != null) {
-                                    fAct.runOnUiThread(() -> Toast.makeText(fCtx,
-                                            "OBB copy " + percent + "% • " + fileName,
-                                            Toast.LENGTH_SHORT).show());
-                                }
-                            }
-                        });
-                android.util.Log.d("FeaturesticOBB", "OBB copy result: " + obbCopied);
+                boolean installed = false;
+                try {
+                    installed = FeaturesticBox.isInstalled(pkg, 0);
+                } catch (Throwable ignored) {
+                }
 
-                // Step 2: Launch game via SDK's startGame() — it also retries OBB internally as backup
-                boolean launched = FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                boolean obbReady = hasVirtualObbFiles(pkg);
+                if (!installed || !obbReady) {
+                    FileCopyTask task = new FileCopyTask(ctx);
+                    StringBuilder errOut = new StringBuilder();
+                    boolean fixed = task.installOrFixPkgSync(pkg, null, errOut);
+                    obbReady = hasVirtualObbFiles(pkg);
+                    installed = FeaturesticBox.isInstalled(pkg, 0);
+                    if (!fixed || !installed || !obbReady) {
+                        final String msg = errOut.length() > 0
+                                ? errOut.toString()
+                                : "OBB copy failed — check /storage/emulated/0/Android/obb/" + pkg;
+                        if (act != null) {
+                            act.runOnUiThread(() -> Toast.makeText(ctx, msg, Toast.LENGTH_LONG).show());
+                        }
+                        return;
+                    }
+                }
+
+                boolean launched = FeaturesticBox.startGame(ctx, pkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
                 android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);
-
-                if (fAct != null && !obbCopied && !FeaturesticBox.hasVirtualObb(fPkg)) {
-                    fAct.runOnUiThread(() -> Toast.makeText(fCtx,
-                            "OBB copy failed — game may run without OBB. " +
-                                    "Grant All Files Access or copy OBB manually to " +
-                                    "/storage/emulated/0/SdCard/Android/obb/" + fPkg,
+                if (!launched && act != null) {
+                    act.runOnUiThread(() -> Toast.makeText(ctx,
+                            "Failed to launch " + pkg + " inside Virtual Box",
                             Toast.LENGTH_LONG).show());
                 }
             } catch (Throwable t) {
                 android.util.Log.e("FeaturesticOBB", "launchVirtualGame error: " + t.getMessage());
-                // Still try to launch even if OBB copy fails
-                try {
-                    FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
-                } catch (Throwable ignored2) {}
+                if (act != null) {
+                    act.runOnUiThread(() -> Toast.makeText(ctx,
+                            "Launch error: " + (t.getMessage() != null ? t.getMessage() : "Unknown"),
+                            Toast.LENGTH_LONG).show());
+                }
             }
         }, "Featurestic-Game-Launch").start();
 
@@ -381,11 +416,11 @@ public final class FeaturesticSdkHelper {
     }
 
     /**
-     * Standalone OBB sync — used by "Resync OBB" button.
-     * Delegates to SDK's FeaturesticStorageManager.copyOrSyncObbWithProgress().
+     * Standalone OBB sync — copies host OBB into /SdCard/Android/obb/<pkg>.
      */
     public static boolean syncObbNow(Context context, String packageName) {
         if (context == null || packageName == null || packageName.isEmpty()) return false;
-        return FeaturesticBox.copyObbWithProgress(context, packageName, null);
+        FileCopyTask task = new FileCopyTask(context);
+        return task.installOrFixPkgSync(packageName, null, null);
     }
 }

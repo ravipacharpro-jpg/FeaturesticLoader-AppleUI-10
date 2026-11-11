@@ -318,7 +318,7 @@ public class MainActivity extends Activity {
             tvCloneStatusValue.setTextColor(Color.parseColor("#30D158"));
 
             dotObbStatus.setBackgroundResource(R.drawable.dot_apple_green);
-            tvObbStatusValue.setText(hasVirtObb ? "Synced in /SdCard/Android/obb" : "Direct Host OBB Mount Ready");
+            tvObbStatusValue.setText(hasVirtObb ? "Synced in /SdCard/Android/obb" : "OBB Missing • Tap Setup");
             tvObbStatusValue.setTextColor(Color.parseColor("#30D158"));
 
             dotEngineStatus.setBackgroundResource(R.drawable.dot_apple_blue);
@@ -335,13 +335,21 @@ public class MainActivity extends Activity {
         } else {
             currentButtonState = STATE_NEEDS_SETUP;
 
-            dotCloneStatus.setBackgroundResource(R.drawable.dot_apple_amber);
-            tvCloneStatusValue.setText("Pending Virtual Clone");
-            tvCloneStatusValue.setTextColor(Color.parseColor("#FF9F0A"));
+            boolean cloned = false;
+            try {
+                cloned = FeaturesticBox.isInstalled(selectedPackage, 0);
+            } catch (Throwable ignored) {
+            }
+            dotCloneStatus.setBackgroundResource(cloned ? R.drawable.dot_apple_green : R.drawable.dot_apple_amber);
+            tvCloneStatusValue.setText(cloned ? "Cloned in Virtual Box" : "Pending Virtual Clone");
+            tvCloneStatusValue.setTextColor(cloned ? Color.parseColor("#30D158") : Color.parseColor("#FF9F0A"));
 
-            dotObbStatus.setBackgroundResource(R.drawable.dot_apple_amber);
-            tvObbStatusValue.setText(hasHostObb ? "Host OBB Found • Tap Setup" : "Ready for OBB Sync");
-            tvObbStatusValue.setTextColor(Color.parseColor("#FF9F0A"));
+            dotObbStatus.setBackgroundResource(hasVirtObb ? R.drawable.dot_apple_green : R.drawable.dot_apple_amber);
+            tvObbStatusValue.setText(hasVirtObb
+                    ? "Synced in /SdCard/Android/obb"
+                    : (hasHostObb ? "Host OBB Found • Tap Setup" : "Ready for OBB Sync"));
+            tvObbStatusValue.setTextColor(hasVirtObb
+                    ? Color.parseColor("#30D158") : Color.parseColor("#FF9F0A"));
 
             dotEngineStatus.setBackgroundResource(R.drawable.dot_apple_blue);
             tvEngineStatusValue.setText("120 FPS • Clean ID Standby");
@@ -360,6 +368,8 @@ public class MainActivity extends Activity {
             AppleAnimationHelper.playMorphPop(btnSmartAction);
         }
     }
+
+    private static final int REQUEST_SAF_OBB_TREE = 1005;
 
     /**
      * Executes the complete Virtual Box Setup (APK Clone + OBB Copy/Mount into /SdCard/Android/obb + Engine Prep)
@@ -392,19 +402,70 @@ public class MainActivity extends Activity {
 
             @Override
             public void onComplete(boolean success, String message) {
+                currentButtonState = STATE_NEEDS_SETUP;
                 if (success) {
                     Toast.makeText(MainActivity.this,
                             "Setup complete! Tap Start Game to launch.",
                             Toast.LENGTH_SHORT).show();
                 } else {
+                    String err = message != null ? message : "Unknown error";
                     Toast.makeText(MainActivity.this,
-                            "Setup failed: " + (message != null ? message : "Unknown error") +
-                                    "\nGrant 'All Files Access' permission and tap Setup Game again.",
+                            "Setup failed: " + err,
                             Toast.LENGTH_LONG).show();
+                    if (Build.VERSION.SDK_INT >= 30 && !isFinishing() && !isDestroyed()
+                            && com.featurestic.loader.sdk.FileCopyTask.getSavedSafTreeUri(MainActivity.this, targetPkg) == null
+                            && err.toLowerCase(java.util.Locale.US).contains("obb")) {
+                        promptSafObbAccess(targetPkg);
+                    }
                 }
                 refreshGameStateUI(true);
             }
         });
+    }
+
+    private void promptSafObbAccess(final String targetPkg) {
+        try {
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("Allow OBB Folder Access")
+                    .setMessage("Android blocked direct access to Android/obb/" + targetPkg
+                            + ". Tap 'Select Folder' and then 'Use this folder' to copy the OBB.")
+                    .setPositiveButton("Select Folder", (dialog, which) -> openObbSafPicker(targetPkg))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void openObbSafPicker(String targetPkg) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                android.net.Uri initialUri = android.provider.DocumentsContract.buildDocumentUri(
+                        "com.android.externalstorage.documents",
+                        "primary:Android/obb/" + targetPkg);
+                intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initialUri);
+            }
+            startActivityForResult(intent, REQUEST_SAF_OBB_TREE);
+        } catch (Throwable t) {
+            Toast.makeText(this, "Cannot open folder picker: " + t.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_SAF_OBB_TREE && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            android.net.Uri treeUri = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Throwable ignored) {
+            }
+            com.featurestic.loader.sdk.FileCopyTask.saveSafTreeUri(this, selectedPackage, treeUri);
+            startVirtualSetupFlow();
+        }
     }
 
     private void updateSetupProgress(int percent, String title, String detail) {
@@ -416,8 +477,6 @@ public class MainActivity extends Activity {
 
     /**
      * Launches the game inside FeaturesticBox when the user taps "Start Game"
-     * OBB sync is handled internally by FeaturesticBox.startGame() during launch,
-     * so we launch directly instead of re-running setup.
      */
     private void launchGameInVirtualBox() {
         if (!FeaturesticSdkHelper.isInstalledOnHost(this, selectedPackage)) {
@@ -431,7 +490,7 @@ public class MainActivity extends Activity {
         tvSmartButtonSubtitle.setText("Starting Featurestic Virtual Engine");
         progressSmartButton.setVisibility(View.VISIBLE);
 
-        boolean launched = FeaturesticSdkHelper.launchVirtualGame(this, selectedPackage);
+        FeaturesticSdkHelper.launchVirtualGame(this, selectedPackage);
 
         mainHandler.postDelayed(new Runnable() {
             @Override
@@ -441,10 +500,6 @@ public class MainActivity extends Activity {
                 tvSmartButtonSubtitle.setText(AppConfig.BTN_START_SUBTITLE);
             }
         }, 1800);
-
-        if (!launched) {
-            Toast.makeText(this, "Initializing virtual container, please tap Start Game again.", Toast.LENGTH_SHORT).show();
-        }
     }
 
     private String getFriendlyTitle(String pkg) {
