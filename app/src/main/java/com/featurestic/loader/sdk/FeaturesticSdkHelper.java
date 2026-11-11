@@ -15,6 +15,7 @@ import android.provider.Settings;
 import android.widget.Toast;
 
 import com.featurestic.loader.AppConfig;
+import com.featurestic.box.core.env.FeaturesticStorageManager;
 import com.featurestic.sdk.FeaturesticBox;
 
 import java.io.File;
@@ -25,7 +26,7 @@ import java.io.File;
  *   1. Display Over Other Apps (SYSTEM_ALERT_WINDOW / Floating Permission)
  *   2. Android 11–16 All Files Access (MANAGE_EXTERNAL_STORAGE) for /SdCard/Android/obb
  *   3. Android 13+ Notification Permission (POST_NOTIFICATIONS)
- *   4. 4-Layer Host Game Detection & 4-Layer OBB Sync into /storage/emulated/0/SdCard/Android/obb/<pkg>
+ *   4. 4-Layer Host Game Detection & SDK Multi-Layer OBB Sync into /storage/emulated/0/SdCard/Android/obb/<pkg>
  *   5. One-Click Game Launch inside FeaturesticBox with automatic .so plugin staging
  */
 public final class FeaturesticSdkHelper {
@@ -257,6 +258,15 @@ public final class FeaturesticSdkHelper {
         });
     }
 
+    /**
+     * Launch the virtualized game.
+     * Flow:
+     *   1. Ensure All Files Access permission (needed to read host OBB + write virtual OBB)
+     *   2. Copy OBB from host → virtual path using SDK's FeaturesticStorageManager.copyOrSyncObbWithProgress()
+     *      This uses multi-layer discovery (11+ storage roots), filename probing, shell/root cp fallback,
+     *      atomic temp-file rename, and 512KB buffer — the same logic used by reference loaders.
+     *   3. Launch via FeaturesticBox.startGame() which also retries OBB internally as backup.
+     */
     public static boolean launchVirtualGame(Context context, String packageName) {
         try {
             String savedKey = com.featurestic.loader.auth.PhpAuthManager.getSavedKey(context);
@@ -270,43 +280,73 @@ public final class FeaturesticSdkHelper {
         final String pkg = packageName;
         final Activity act = (context instanceof Activity) ? (Activity) context : null;
 
+        // Permission check: All Files Access needed to read host OBB and write virtual OBB
+        if (act != null && Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            act.runOnUiThread(() -> Toast.makeText(ctx,
+                    "All Files Access chahiye OBB copy ke liye! Settings se enable karein.",
+                    Toast.LENGTH_LONG).show());
+            requestAllFilesPermission(act);
+        }
+
         final Context fCtx = ctx;
         final String fPkg = pkg;
         final Activity fAct = act;
 
-        // Step 1: Copy OBB from host → virtual path using FileCopyTask (Dynamic VIP reference logic)
-        FileCopyTask fileCopyTask = new FileCopyTask(act);
-        if (act != null && !fileCopyTask.hasAllFilesPermission()) {
-            act.runOnUiThread(() -> Toast.makeText(ctx,
-                    "All Files Access chahiye OBB copy ke liye! Settings se enable karein.",
-                    Toast.LENGTH_LONG).show());
-            fileCopyTask.requestAllFilesPermission();
-        }
+        // Step 1: Copy OBB using SDK's production-ready multi-layer copy engine.
+        // FeaturesticStorageManager.copyOrSyncObbWithProgress() handles:
+        //   - Multi-layer discovery across 11+ storage roots (/mnt/runtime/full/, /data/media/0, etc.)
+        //   - Filename probing (bypasses Android 13+ listFiles()==null block)
+        //   - Shell/root cp fallback when Java FileInputStream is blocked
+        //   - Atomic temp-file (.copying) + rename
+        //   - 512KB high-speed buffer
+        new Thread(() -> {
+            try {
+                android.util.Log.d("FeaturesticOBB", "Step 1: Copying OBB via SDK FeaturesticStorageManager...");
+                boolean obbCopied = FeaturesticStorageManager.copyOrSyncObbWithProgress(fCtx, fPkg,
+                        new FeaturesticStorageManager.CopyProgressListener() {
+                            @Override
+                            public void onProgress(int percent, long copiedBytes, long totalBytes, String fileName) {
+                                android.util.Log.d("FeaturesticOBB", "OBB progress: " + percent + "% " +
+                                        (copiedBytes / (1024L * 1024L)) + "MB / " +
+                                        (totalBytes / (1024L * 1024L)) + "MB " + fileName);
+                                if (fAct != null) {
+                                    fAct.runOnUiThread(() -> Toast.makeText(fCtx,
+                                            "OBB copy " + percent + "% • " + fileName,
+                                            Toast.LENGTH_SHORT).show());
+                                }
+                            }
+                        });
+                android.util.Log.d("FeaturesticOBB", "OBB copy result: " + obbCopied);
 
-        fileCopyTask.copyObbFolderAsync(pkg, new FileCopyTask.CopyCallback() {
-            @Override
-            public void onCopyCompleted(boolean success, String message) {
-                android.util.Log.d("FeaturesticOBB", "OBB copy: success=" + success + " msg=" + message);
+                // Step 2: Launch game via SDK's startGame() — it also retries OBB internally as backup
+                boolean launched = FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);
 
-                // Step 2: Launch game via SDK's startGame() — it also retries OBB internally
-                new Thread(() -> {
-                    try {
-                        boolean launched = FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
-                        android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);
-                    } catch (Throwable t) {
-                        android.util.Log.e("FeaturesticOBB", "startGame error: " + t.getMessage());
-                    }
-                }, "Featurestic-Game-Launch").start();
-
-                if (fAct != null && !success) {
+                if (fAct != null && !obbCopied && !FeaturesticBox.hasVirtualObb(fPkg)) {
                     fAct.runOnUiThread(() -> Toast.makeText(fCtx,
-                            "OBB copy fail: " + message + "\nHost: /storage/emulated/0/Android/obb/" + fPkg +
-                                    "\nDest: /storage/emulated/0/SdCard/Android/obb/" + fPkg,
+                            "OBB copy failed — game may run without OBB. " +
+                                    "Grant All Files Access or copy OBB manually to " +
+                                    "/storage/emulated/0/SdCard/Android/obb/" + fPkg,
                             Toast.LENGTH_LONG).show());
                 }
+            } catch (Throwable t) {
+                android.util.Log.e("FeaturesticOBB", "launchVirtualGame error: " + t.getMessage());
+                // Still try to launch even if OBB copy fails
+                try {
+                    FeaturesticBox.startGame(fCtx, fPkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                } catch (Throwable ignored2) {}
             }
-        });
+        }, "Featurestic-Game-Launch").start();
 
         return true;
+    }
+
+    /**
+     * Standalone OBB sync — used by "Resync OBB" button.
+     * Delegates to SDK's FeaturesticStorageManager.copyOrSyncObbWithProgress().
+     */
+    public static boolean syncObbNow(Context context, String packageName) {
+        if (context == null || packageName == null || packageName.isEmpty()) return false;
+        return FeaturesticBox.copyObbWithProgress(context, packageName, null);
     }
 }

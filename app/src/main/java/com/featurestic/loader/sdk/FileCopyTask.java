@@ -1,7 +1,6 @@
 package com.featurestic.loader.sdk;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
@@ -63,8 +62,21 @@ public class FileCopyTask {
     public boolean hasHostObb(String packageName) {
         File srcDir = getHostObbDir(packageName);
         if (!srcDir.exists() || !srcDir.isDirectory()) return false;
+        // Try listFiles first
         File[] files = srcDir.listFiles((dir, name) -> name.endsWith(".obb"));
-        return files != null && files.length > 0;
+        if (files != null && files.length > 0) return true;
+        // Fallback: probe known OBB filenames directly
+        String[] knownNames = new String[]{
+                "main.21535." + packageName + ".obb",
+                "patch.21535." + packageName + ".obb",
+                "main.21536." + packageName + ".obb",
+                "main.21534." + packageName + ".obb",
+        };
+        for (String name : knownNames) {
+            File f = new File(srcDir, name);
+            if (f.isFile() && f.length() >= 1024L * 1024L) return true;
+        }
+        return false;
     }
 
     public void requestAllFilesPermission() {
@@ -92,13 +104,13 @@ public class FileCopyTask {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !hasAllFilesPermission()) {
             requestAllFilesPermission();
             if (callback != null) {
-                callback.onCopyCompleted(false, "All Files Access permission required!");
+                callback.onCopyCompleted(false, "All Files Access permission required! Go to Settings and enable it.");
             }
             return;
         }
 
         if (isObbCopied(packageName)) {
-            if (callback != null) callback.onCopyCompleted(true, "OBB already copied");
+            if (callback != null) callback.onCopyCompleted(true, "OBB already exists in virtual path");
             return;
         }
 
@@ -113,10 +125,10 @@ public class FileCopyTask {
 
         new AsyncTask<Void, Integer, Boolean>() {
             private String errorMsg = "";
+            private File[] foundFiles = null;
 
             @Override
             protected void onPreExecute() {
-                // Could show progress dialog here
             }
 
             @Override
@@ -124,8 +136,13 @@ public class FileCopyTask {
                 File sourceDir = getHostObbDir(packageName);
                 File destDir = getExternalObbDir(packageName);
 
-                if (!sourceDir.exists() || !sourceDir.canRead()) {
-                    errorMsg = "Source OBB not found or unreadable!";
+                // Check source readability
+                if (!sourceDir.exists()) {
+                    errorMsg = "Source directory does not exist: " + sourceDir.getAbsolutePath();
+                    return false;
+                }
+                if (!sourceDir.canRead()) {
+                    errorMsg = "Source directory not readable (Linux permission blocks non-root access)";
                     return false;
                 }
 
@@ -134,31 +151,97 @@ public class FileCopyTask {
                     return false;
                 }
 
-                File[] files = sourceDir.listFiles((dir, name) -> name.endsWith(".obb"));
-                if (files == null || files.length == 0) {
-                    errorMsg = "No OBB files to copy!";
+                // Collect source OBB files (try listFiles, then direct filename probe)
+                java.util.List<File> srcFiles = new java.util.ArrayList<>();
+                File[] list = sourceDir.listFiles((dir, name) -> name.endsWith(".obb"));
+                if (list != null) {
+                    for (File f : list) {
+                        if (f != null && f.isFile() && f.length() >= 1024L * 1024L) {
+                            srcFiles.add(f);
+                        }
+                    }
+                }
+                // Fallback: probe known filenames directly
+                if (srcFiles.isEmpty()) {
+                    String[] knownNames = new String[]{
+                            "main.21535." + packageName + ".obb",
+                            "patch.21535." + packageName + ".obb",
+                            "main.21536." + packageName + ".obb",
+                            "main.21534." + packageName + ".obb",
+                    };
+                    for (String name : knownNames) {
+                        File f = new File(sourceDir, name);
+                        if (f.isFile() && f.length() >= 1024L * 1024L && !srcFiles.contains(f)) {
+                            srcFiles.add(f);
+                        }
+                    }
+                }
+                if (srcFiles.isEmpty()) {
+                    errorMsg = "No valid OBB files found in source directory!";
                     return false;
                 }
 
+                foundFiles = srcFiles.toArray(new File[0]);
+
+                long totalBytes = 0;
+                for (File f : foundFiles) totalBytes += f.length();
+
+                long copiedBytes = 0;
                 try {
-                    for (File file : files) {
+                    for (File file : foundFiles) {
                         File destFile = new File(destDir, file.getName());
 
                         // Skip if already exists with same size
                         if (destFile.exists() && destFile.length() == file.length()) {
+                            copiedBytes += file.length();
+                            publishProgress((int) ((copiedBytes * 100) / Math.max(totalBytes, 1)));
                             continue;
                         }
 
-                        try (FileChannel sourceChannel = new FileInputStream(file).getChannel();
-                             FileChannel destChannel = new FileOutputStream(destFile).getChannel()) {
+                        boolean copied = false;
 
-                            long size = sourceChannel.size();
-                            long transferred = 0;
-                            while (transferred < size) {
-                                long bytes = sourceChannel.transferTo(transferred, size - transferred, destChannel);
-                                if (bytes <= 0) break;
-                                transferred += bytes;
+                        // Method 1: FileChannel.transferTo()
+                        try {
+                            try (FileChannel sourceChannel = new FileInputStream(file).getChannel();
+                                 FileChannel destChannel = new FileOutputStream(destFile).getChannel()) {
+                                long size = sourceChannel.size();
+                                long transferred = 0;
+                                while (transferred < size) {
+                                    long bytes = sourceChannel.transferTo(transferred, size - transferred, destChannel);
+                                    if (bytes <= 0) break;
+                                    transferred += bytes;
+                                    copiedBytes += bytes;
+                                    publishProgress((int) ((copiedBytes * 100) / Math.max(totalBytes, 1)));
+                                }
                             }
+                            if (destFile.exists() && destFile.length() == file.length()) {
+                                copied = true;
+                            }
+                        } catch (IOException e) {
+                            // Fall through to Method 2
+                        }
+
+                        // Method 2: FileInputStream + FileOutputStream (8KB buffer like reference loaders)
+                        if (!copied) {
+                            try (FileInputStream in = new FileInputStream(file);
+                                 FileOutputStream out = new FileOutputStream(destFile)) {
+                                byte[] buffer = new byte[8192];
+                                int bytesRead;
+                                while ((bytesRead = in.read(buffer)) != -1) {
+                                    out.write(buffer, 0, bytesRead);
+                                    copiedBytes += bytesRead;
+                                    publishProgress((int) ((copiedBytes * 100) / Math.max(totalBytes, 1)));
+                                }
+                                out.flush();
+                            }
+                            if (destFile.exists() && destFile.length() == file.length()) {
+                                copied = true;
+                            }
+                        }
+
+                        if (!copied) {
+                            errorMsg = "Failed to copy: " + file.getName();
+                            return false;
                         }
                     }
                 } catch (IOException e) {
@@ -166,6 +249,11 @@ public class FileCopyTask {
                     return false;
                 }
                 return true;
+            }
+
+            @Override
+            protected void onProgressUpdate(Integer... values) {
+                // Progress callback could update UI
             }
 
             @Override
@@ -181,6 +269,6 @@ public class FileCopyTask {
                     }
                 }
             }
-        }.execute();
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
 }
