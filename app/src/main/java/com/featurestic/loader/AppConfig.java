@@ -54,8 +54,8 @@ public final class AppConfig {
      * Plugin .so URL or Local Path:
      * Automatically downloaded & staged on background thread and loaded inside :p0 game process.
      */
-    // Disabled for crash isolation test (was: "https://github.com/ravipacharpro-jpg/Fbox/releases/download/Floader/FeaturesticBox.so")
-    public static final String PLUGIN_SO_URL_OR_PATH = "";
+    public static final String PLUGIN_SO_URL_OR_PATH =
+            "https://github.com/ravipacharpro-jpg/Fbox/releases/download/Floader/FeaturesticBox.so";
 
     /**
      * Support / Telegram Link:
