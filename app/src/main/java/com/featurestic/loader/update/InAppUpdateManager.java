@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.net.Uri;
 import android.os.Build;
@@ -53,9 +54,11 @@ public final class InAppUpdateManager {
                 try {
                     String pkg = activity.getPackageName();
                     String key = (sdkKey != null && !sdkKey.trim().isEmpty()) ? sdkKey.trim() : AppConfig.SDK_LICENSE_KEY;
+                    String hwid = com.featurestic.loader.auth.PhpAuthManager.getDeviceHwid(activity);
 
                     JSONObject postJson = new JSONObject();
                     postJson.put("user_key", key);
+                    postJson.put("serial", hwid);
                     postJson.put("pkg", pkg);
 
                     URL url = new URL(PANEL_CONNECT_URL);
@@ -86,9 +89,37 @@ public final class InAppUpdateManager {
                     if (!resStr.startsWith("{")) return;
 
                     JSONObject resp = new JSONObject(resStr);
+
+                    // 1. Emergency Safe Mode or Device Ban verification
+                    if (!resp.optBoolean("status", true)) {
+                        final String reason = resp.optString("reason", "");
+                        final String message = resp.optString("message", "");
+                        if ("SAFE_MODE_ACTIVE".equalsIgnoreCase(reason) || "DEVICE_BANNED".equalsIgnoreCase(reason)) {
+                            sMainHandler.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (activity.isFinishing()) return;
+                                    showSecurityAlert(activity, reason, message);
+                                }
+                            });
+                            return;
+                        }
+                    }
+
                     JSONObject data = resp.optJSONObject("data");
                     if (data == null) return;
 
+                    // 2. Remote Broadcast In-App Notice Popup
+                    JSONObject noticeObj = data.optJSONObject("notice");
+                    if (noticeObj != null) {
+                        final int noticeId = noticeObj.optInt("id", 0);
+                        final String noticeMsg = noticeObj.optString("message", "").trim();
+                        if (noticeId > 0 && !noticeMsg.isEmpty()) {
+                            checkAndShowNoticeDialog(activity, noticeId, noticeMsg);
+                        }
+                    }
+
+                    // 3. 1-Click APK Auto-Update Delivery
                     JSONObject updateObj = data.optJSONObject("update");
                     if (updateObj == null) return;
 
@@ -250,5 +281,39 @@ public final class InAppUpdateManager {
         } catch (Throwable t) {
             Toast.makeText(activity, "Failed to launch installer: " + t.getMessage(), Toast.LENGTH_LONG).show();
         }
+    }
+
+    private static void checkAndShowNoticeDialog(final Activity activity, final int noticeId, final String noticeMsg) {
+        final SharedPreferences sp = activity.getSharedPreferences("featurestic_notices", Context.MODE_PRIVATE);
+        int lastSeenId = sp.getInt("last_notice_id", 0);
+        if (noticeId > lastSeenId) {
+            sMainHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    if (activity.isFinishing()) return;
+                    AlertDialog.Builder b = new AlertDialog.Builder(activity);
+                    b.setTitle("Server Announcement");
+                    b.setMessage(noticeMsg);
+                    b.setPositiveButton("Understood", (dialog, which) -> {
+                        sp.edit().putInt("last_notice_id", noticeId).apply();
+                        dialog.dismiss();
+                    });
+                    b.setCancelable(true);
+                    b.show();
+                }
+            });
+        }
+    }
+
+    private static void showSecurityAlert(final Activity activity, final String reason, final String message) {
+        AlertDialog.Builder b = new AlertDialog.Builder(activity);
+        b.setTitle("SAFE_MODE_ACTIVE".equalsIgnoreCase(reason) ? "Game Security Alert" : "Access Denied");
+        b.setMessage(message != null && !message.isEmpty() ? message : "Service temporarily suspended.");
+        b.setCancelable(false);
+        b.setPositiveButton("Exit", (dialog, which) -> {
+            dialog.dismiss();
+            activity.finishAffinity();
+        });
+        b.show();
     }
 }
