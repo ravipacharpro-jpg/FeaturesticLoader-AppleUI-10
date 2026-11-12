@@ -40,10 +40,15 @@ public class LoaderApp extends Application {
                     try {
                         StringWriter sw = new StringWriter();
                         e.printStackTrace(new PrintWriter(sw));
+                        String stacktrace = sw.toString();
+
                         File f = new File(context.getFilesDir(), "last_crash.txt");
                         try (FileOutputStream fos = new FileOutputStream(f)) {
-                            fos.write(sw.toString().getBytes(StandardCharsets.UTF_8));
+                            fos.write(stacktrace.getBytes(StandardCharsets.UTF_8));
                         }
+
+                        // Silent crash telemetry to panel
+                        sendCrashTelemetry(context, stacktrace, e.getClass().getSimpleName());
                     } catch (Throwable ignored) {
                     }
                     if (defaultHandler != null) {
@@ -53,5 +58,46 @@ public class LoaderApp extends Application {
             });
         } catch (Throwable ignored) {
         }
+    }
+
+    private void sendCrashTelemetry(final Context context, final String stacktrace, final String crashType) {
+        Thread netThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    java.net.URL url = new java.net.URL(AppConfig.CRASH_REPORT_URL);
+                    java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setConnectTimeout(2500);
+                    conn.setReadTimeout(2500);
+                    conn.setDoOutput(true);
+                    conn.setRequestProperty("Content-Type", "application/json");
+
+                    org.json.JSONObject obj = new org.json.JSONObject();
+                    obj.put("brand", android.os.Build.MANUFACTURER);
+                    obj.put("model", android.os.Build.MODEL);
+                    obj.put("android_version", android.os.Build.VERSION.RELEASE);
+                    obj.put("sdk_int", android.os.Build.VERSION.SDK_INT);
+                    obj.put("app_version", "1.0.0");
+                    obj.put("crash_type", crashType);
+                    obj.put("stacktrace", stacktrace);
+                    try {
+                        obj.put("device_id", com.featurestic.loader.auth.PhpAuthManager.getDeviceHwid(context));
+                    } catch (Throwable ignored) {}
+
+                    byte[] data = obj.toString().getBytes(StandardCharsets.UTF_8);
+                    try (java.io.OutputStream os = conn.getOutputStream()) {
+                        os.write(data);
+                        os.flush();
+                    }
+                    conn.getResponseCode();
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+        netThread.start();
+        try {
+            netThread.join(2000);
+        } catch (InterruptedException ignored) {}
     }
 }

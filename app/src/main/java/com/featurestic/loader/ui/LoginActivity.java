@@ -63,11 +63,14 @@ public class LoginActivity extends Activity {
         tvHwidBadge = findViewById(R.id.tvHwidBadge);
         btnSupport = findViewById(R.id.btnGetKeySupport);
 
-        // Pre-fill saved license key if available
+        // Pre-fill saved license key if available, otherwise pre-fill generated test key
         String savedKey = PhpAuthManager.getSavedKey(this);
         if (!savedKey.isEmpty()) {
             etLicenseKey.setText(savedKey);
             etLicenseKey.setSelection(savedKey.length());
+        } else if (AppConfig.MASTER_TEST_KEY != null && !AppConfig.MASTER_TEST_KEY.isEmpty()) {
+            etLicenseKey.setText(AppConfig.MASTER_TEST_KEY);
+            etLicenseKey.setSelection(AppConfig.MASTER_TEST_KEY.length());
         }
 
         // Display Device HWID in subtle Apple monospace pill
