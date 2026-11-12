@@ -97,8 +97,8 @@ public class PhpAuthManager {
                     URL url = new URL(endpoint);
                     HttpURLConnection conn = (HttpURLConnection) url.openConnection();
                     conn.setInstanceFollowRedirects(true);
-                    conn.setConnectTimeout(15000);
-                    conn.setReadTimeout(15000);
+                    conn.setConnectTimeout(30000);
+                    conn.setReadTimeout(30000);
                     conn.setDoInput(true);
                     conn.setRequestProperty("Accept", "application/json");
                     conn.setRequestProperty("Charset", "UTF-8");

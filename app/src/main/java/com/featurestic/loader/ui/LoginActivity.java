@@ -27,7 +27,7 @@ import com.featurestic.loader.sdk.FeaturesticSdkHelper;
 /**
  * Screen 1 — Apple Cupertino Glassmorphism Login Screen
  * 1. Requests required permissions on start (Overlay / Float over other apps, All Files Access for OBB, Notifications)
- * 2. Connects to Zoro PHP Panel (https://zoro.manishflash.online/connect) to verify license key
+ * 2. Connects to ZeroX Panel (https://zerox-bypass-panel.onrender.com/api/public/connect) to verify license key
  * 3. Transitions smoothly to MainActivity
  */
 public class LoginActivity extends Activity {
