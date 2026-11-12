@@ -25,17 +25,15 @@ public final class AppConfig {
     public static final String BTN_START_SUBTITLE = "Launch inside Featurestic Virtual Box";
 
     // ------------------------------------------------------------------------
-    // 2. PHP PANEL AUTHENTICATION SETTINGS
+    // 2. LOADER END-USER PHP PANEL (ZORO) & SDK ANTI-PIRACY SETTINGS
     // ------------------------------------------------------------------------
-    public static final String PHP_PANEL_URL    = "https://featurestic-box-panel.onrender.com/connect";
+    public static final String PHP_PANEL_URL    = "https://zoro.manishflash.online/connect";
+    public static final String SDK_LICENSE_KEY  = "FBVIP-SMC154L690";
     public static final String CRASH_REPORT_URL = "https://featurestic-box-panel.onrender.com/api/telemetry/crash";
     public static final String PHP_GAME_TAG     = "PUBG";
 
-    /**
-     * Master Test Key fallback in case needed.
-     */
     public static final boolean ALLOW_DEMO_FALLBACK_WHEN_UNCONFIGURED = false;
-    public static final String MASTER_TEST_KEY = "FBVIP-SMC154L690";
+    public static final String MASTER_TEST_KEY = "FEATURESTIC-VIP";
 
     // ------------------------------------------------------------------------
     // 3. SUPPORTED GAMES & VIRTUAL ENGINE OPTIONS

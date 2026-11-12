@@ -45,6 +45,7 @@ public final class FeaturesticSdkHelper {
     public static void initEngine(Context context) {
         try {
             clearCachedPluginSoIfDisabled(context);
+            FeaturesticBox.setSdkKey(context, AppConfig.SDK_LICENSE_KEY);
             FeaturesticBox.doCreate(context);
             FeaturesticBox.setFeature("hide_root", AppConfig.ENABLE_HIDE_ROOT);
             FeaturesticBox.setFeature("hide_xposed", AppConfig.ENABLE_HIDE_XPOSED);
