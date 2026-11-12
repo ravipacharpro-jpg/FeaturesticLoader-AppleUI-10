@@ -27,7 +27,7 @@ public final class AppConfig {
     // ------------------------------------------------------------------------
     // 2. PHP PANEL AUTHENTICATION SETTINGS
     // ------------------------------------------------------------------------
-    public static final String PHP_PANEL_URL = "https://zerox-bypass-panel.onrender.com/api/public/connect";
+    public static final String PHP_PANEL_URL = "https://zoro.manishflash.online/connect";
     public static final String PHP_GAME_TAG  = "PUBG";
 
     /**
