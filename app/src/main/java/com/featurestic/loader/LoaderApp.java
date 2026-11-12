@@ -74,10 +74,10 @@ public class LoaderApp extends Application {
                     conn.setRequestProperty("Content-Type", "application/json");
 
                     org.json.JSONObject obj = new org.json.JSONObject();
-                    obj.put("brand", android.os.Build.MANUFACTURER);
-                    obj.put("model", android.os.Build.MODEL);
-                    obj.put("android_version", android.os.Build.VERSION.RELEASE);
-                    obj.put("sdk_int", android.os.Build.VERSION.SDK_INT);
+                    obj.put("brand", com.featurestic.box.utils.compat.RealDeviceHelper.REAL_MANUFACTURER);
+                    obj.put("model", com.featurestic.box.utils.compat.RealDeviceHelper.REAL_MODEL);
+                    obj.put("android_version", com.featurestic.box.utils.compat.RealDeviceHelper.REAL_ANDROID_VERSION);
+                    obj.put("sdk_int", com.featurestic.box.utils.compat.RealDeviceHelper.REAL_SDK_INT);
                     obj.put("app_version", "1.0.0");
                     obj.put("crash_type", crashType);
                     obj.put("stacktrace", stacktrace);

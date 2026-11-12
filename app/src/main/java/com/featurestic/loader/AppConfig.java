@@ -51,10 +51,10 @@ public final class AppConfig {
 
     /**
      * Plugin .so URL or Local Path:
-     * Automatically downloaded & staged on background thread and loaded inside :p0 game process.
+     * Set to "PANEL" to automatically load the .so configured dynamically in Featurestic Box Panel Settings!
+     * OR put a direct GitHub/CDN .so link to load directly from your own repository.
      */
-    public static final String PLUGIN_SO_URL_OR_PATH =
-            "https://github.com/ravipacharpro-jpg/Fbox/releases/download/Floader/FeaturesticBox.so";
+    public static final String PLUGIN_SO_URL_OR_PATH = "PANEL";
 
     /**
      * Support / Telegram Link:

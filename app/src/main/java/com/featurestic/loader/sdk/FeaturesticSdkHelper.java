@@ -445,7 +445,14 @@ public final class FeaturesticSdkHelper {
                 }
 
                 clearCachedPluginSoIfDisabled(ctx);
-                boolean launched = FeaturesticBox.startGame(ctx, pkg, 0, AppConfig.PLUGIN_SO_URL_OR_PATH);
+                String soTarget = AppConfig.PLUGIN_SO_URL_OR_PATH;
+                if (soTarget == null || soTarget.isEmpty() || "PANEL".equalsIgnoreCase(soTarget.trim())) {
+                    String remoteSo = FeaturesticBox.getRemotePluginUrl(ctx);
+                    if (remoteSo != null && !remoteSo.trim().isEmpty()) {
+                        soTarget = remoteSo.trim();
+                    }
+                }
+                boolean launched = FeaturesticBox.startGame(ctx, pkg, 0, soTarget);
                 android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);
                 if (!launched && act != null) {
                     act.runOnUiThread(() -> Toast.makeText(ctx,
