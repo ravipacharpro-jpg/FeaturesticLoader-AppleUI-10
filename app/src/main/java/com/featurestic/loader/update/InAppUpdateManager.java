@@ -143,10 +143,10 @@ public final class InAppUpdateManager {
                     }
 
                     PackageInfo pInfo = activity.getPackageManager().getPackageInfo(pkg, 0);
-                    final String curVer = pInfo.versionName;
+                    final String curVer = (pInfo != null && pInfo.versionName != null) ? pInfo.versionName : "1.0.0";
 
-                    if (latestVersion.equalsIgnoreCase(curVer)) {
-                        return; // Already up to date
+                    if (!isNewerVersion(latestVersion, curVer)) {
+                        return; // Already up to date or current version is newer/equal
                     }
 
                     sMainHandler.post(new Runnable() {
@@ -324,5 +324,34 @@ public final class InAppUpdateManager {
             activity.finishAffinity();
         });
         b.show();
+    }
+
+    public static boolean isNewerVersion(String remote, String current) {
+        if (remote == null || current == null) return false;
+        String cleanRemote = remote.trim().replaceAll("^[vV]", "");
+        String cleanCurrent = current.trim().replaceAll("^[vV]", "");
+        if (cleanRemote.equalsIgnoreCase(cleanCurrent)) return false;
+
+        String[] rParts = cleanRemote.split("[.-]");
+        String[] cParts = cleanCurrent.split("[.-]");
+        int max = Math.max(rParts.length, cParts.length);
+
+        for (int i = 0; i < max; i++) {
+            int rVal = 0;
+            int cVal = 0;
+            if (i < rParts.length) {
+                try {
+                    rVal = Integer.parseInt(rParts[i].replaceAll("\\D+", ""));
+                } catch (Exception ignored) {}
+            }
+            if (i < cParts.length) {
+                try {
+                    cVal = Integer.parseInt(cParts[i].replaceAll("\\D+", ""));
+                } catch (Exception ignored) {}
+            }
+            if (rVal > cVal) return true;
+            if (rVal < cVal) return false;
+        }
+        return false;
     }
 }

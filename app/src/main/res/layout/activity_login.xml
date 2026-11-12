@@ -25,9 +25,10 @@
             android:orientation="vertical">
 
             <ImageView
-                android:layout_width="76dp"
-                android:layout_height="76dp"
-                android:src="@drawable/ic_apple_cube" />
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:scaleType="fitCenter"
+                android:src="@drawable/app_logo" />
 
             <TextView
                 android:layout_width="wrap_content"
