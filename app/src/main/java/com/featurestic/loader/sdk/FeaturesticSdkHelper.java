@@ -78,6 +78,33 @@ public final class FeaturesticSdkHelper {
         return "";
     }
 
+    /**
+     * Computes and verifies SHA-256 anti-tamper hash of a local .so file.
+     */
+    public static boolean verifyFileSha256(File file, String expectedSha) {
+        if (file == null || !file.exists() || expectedSha == null || expectedSha.trim().isEmpty()) {
+            return true; // No hash enforcement requested
+        }
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            try (java.io.InputStream is = new java.io.FileInputStream(file)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = is.read(buffer)) > 0) {
+                    md.update(buffer, 0, read);
+                }
+            }
+            byte[] hash = md.digest();
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString().equalsIgnoreCase(expectedSha.trim());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static void clearCachedPluginSoIfDisabled(Context context) {
         if (context == null) return;
         String eff = resolveEffectivePluginSo(context);
@@ -469,6 +496,27 @@ public final class FeaturesticSdkHelper {
 
                 clearCachedPluginSoIfDisabled(ctx);
                 String soTarget = resolveEffectivePluginSo(ctx);
+
+                // .so Anti-Tamper SHA-256 Checksum Enforcement
+                try {
+                    SharedPreferences secPrefs = ctx.getSharedPreferences("featurestic_so_security", Context.MODE_PRIVATE);
+                    String expectedSha = secPrefs.getString("server_so_sha256", "").trim();
+                    if (!expectedSha.isEmpty() && soTarget != null && !soTarget.startsWith("http://") && !soTarget.startsWith("https://")) {
+                        File localSoFile = new File(soTarget);
+                        if (localSoFile.exists() && !verifyFileSha256(localSoFile, expectedSha)) {
+                            localSoFile.delete();
+                            android.util.Log.e("FeaturesticSO", "SECURITY ABORT: .so SHA-256 checksum mismatch!");
+                            if (act != null) {
+                                act.runOnUiThread(() -> Toast.makeText(ctx,
+                                        "Security Alert: .so Anti-Tamper Checksum Failed! Modified file blocked.",
+                                        Toast.LENGTH_LONG).show());
+                            }
+                            return;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+
                 android.util.Log.d("FeaturesticSO", "Launching game with effective .so: " + (soTarget.isEmpty() ? "NONE" : soTarget));
                 boolean launched = FeaturesticBox.startGame(ctx, pkg, 0, soTarget);
                 android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);

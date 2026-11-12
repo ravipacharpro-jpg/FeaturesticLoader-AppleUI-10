@@ -109,6 +109,15 @@ public final class InAppUpdateManager {
                     JSONObject data = resp.optJSONObject("data");
                     if (data == null) return;
 
+                    // Save .so SHA-256 Anti-Tamper Checksum delivered from /connect
+                    String serverSoSha256 = data.optString("so_sha256", "").trim();
+                    String serverPluginUrl = data.optString("plugin_url", "").trim();
+                    activity.getSharedPreferences("featurestic_so_security", Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("server_so_sha256", serverSoSha256)
+                            .putString("server_plugin_url", serverPluginUrl)
+                            .apply();
+
                     // 2. Remote Broadcast In-App Notice Popup
                     JSONObject noticeObj = data.optJSONObject("notice");
                     if (noticeObj != null) {
