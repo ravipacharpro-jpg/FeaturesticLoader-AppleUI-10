@@ -26,12 +26,8 @@ jobs:
 
       - name: Build Debug & Signed Release APK
         run: |
-          if [ -f "settings.gradle" ]; then
-            gradle assembleDebug assembleRelease --stacktrace
-          elif [ -f "FeaturesticLoader/settings.gradle" ]; then
-            cd FeaturesticLoader
-            gradle assembleDebug assembleRelease --stacktrace
-          fi
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload Built APKs
         uses: actions/upload-artifact@v4
