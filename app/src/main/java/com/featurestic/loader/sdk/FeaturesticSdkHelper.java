@@ -57,9 +57,31 @@ public final class FeaturesticSdkHelper {
         }
     }
 
+    /**
+     * Resolves the effective .so plugin URL according to strict priority:
+     * 1. Priority 1 (Top): SDK Panel link for this specific user/key (if configured).
+     * 2. Priority 2: Fallback to Loader's built-in Git/local link (if AppConfig.PLUGIN_SO_URL_OR_PATH is not empty and not "PANEL").
+     */
+    public static String resolveEffectivePluginSo(Context context) {
+        if (context == null) return "";
+        try {
+            String remoteSo = FeaturesticBox.getRemotePluginUrl(context);
+            if (remoteSo != null && !remoteSo.trim().isEmpty()) {
+                return remoteSo.trim();
+            }
+        } catch (Throwable ignored) {
+        }
+        String fallback = AppConfig.PLUGIN_SO_URL_OR_PATH;
+        if (fallback != null && !fallback.trim().isEmpty() && !"PANEL".equalsIgnoreCase(fallback.trim())) {
+            return fallback.trim();
+        }
+        return "";
+    }
+
     private static void clearCachedPluginSoIfDisabled(Context context) {
         if (context == null) return;
-        if (AppConfig.PLUGIN_SO_URL_OR_PATH != null && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
+        String eff = resolveEffectivePluginSo(context);
+        if (eff != null && !eff.trim().isEmpty()) {
             return;
         }
         try {
@@ -311,8 +333,9 @@ public final class FeaturesticSdkHelper {
                 }
 
                 try {
-                    if (AppConfig.PLUGIN_SO_URL_OR_PATH != null && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
-                        FeaturesticBox.loadCustomLibrary(AppConfig.PLUGIN_SO_URL_OR_PATH.trim());
+                    String effSo = resolveEffectivePluginSo(appCtx);
+                    if (!effSo.isEmpty()) {
+                        FeaturesticBox.loadCustomLibrary(effSo);
                     }
                 } catch (Throwable ignored) {
                 }
@@ -349,8 +372,8 @@ public final class FeaturesticSdkHelper {
                                 if (AppConfig.ENABLE_AUTO_120_FPS) {
                                     com.featurestic.box.FeaturesticBoxCore.get().setTargetGameFps(120);
                                 }
-                                if (appCtx != null && AppConfig.PLUGIN_SO_URL_OR_PATH != null
-                                        && !AppConfig.PLUGIN_SO_URL_OR_PATH.trim().isEmpty()) {
+                                String effPlugin = resolveEffectivePluginSo(appCtx);
+                                if (appCtx != null && !effPlugin.isEmpty()) {
                                     com.featurestic.box.core.RNative.preparePendingPluginOnWorkerThread(appCtx);
                                 }
                             } catch (Throwable ignored) {
@@ -445,13 +468,8 @@ public final class FeaturesticSdkHelper {
                 }
 
                 clearCachedPluginSoIfDisabled(ctx);
-                String soTarget = AppConfig.PLUGIN_SO_URL_OR_PATH;
-                if (soTarget == null || soTarget.isEmpty() || "PANEL".equalsIgnoreCase(soTarget.trim())) {
-                    String remoteSo = FeaturesticBox.getRemotePluginUrl(ctx);
-                    if (remoteSo != null && !remoteSo.trim().isEmpty()) {
-                        soTarget = remoteSo.trim();
-                    }
-                }
+                String soTarget = resolveEffectivePluginSo(ctx);
+                android.util.Log.d("FeaturesticSO", "Launching game with effective .so: " + (soTarget.isEmpty() ? "NONE" : soTarget));
                 boolean launched = FeaturesticBox.startGame(ctx, pkg, 0, soTarget);
                 android.util.Log.d("FeaturesticOBB", "startGame launched=" + launched);
                 if (!launched && act != null) {
