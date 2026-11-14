@@ -99,9 +99,6 @@ public class MainActivity extends Activity {
         // Request Notification / Media / Mic permissions on launch
         FeaturesticSdkHelper.requestRuntimePermissionsOnStart(this);
         checkEssentialPermissionsOnOpen();
-
-        // Check for 1-click In-App Loader APK Auto-Updates from Panel
-        com.featurestic.loader.update.InAppUpdateManager.checkAndPromptUpdate(this, com.featurestic.loader.AppConfig.SDK_LICENSE_KEY);
     }
 
     private void checkEssentialPermissionsOnOpen() {
